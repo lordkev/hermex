@@ -1664,6 +1664,33 @@ Server; its list pops its chat and pushed screens and closes its sheets and conf
   keeps it held while the server signs out to its sign-in form (#942), and it opens after.
   A link never sends a prompt or answers a request.
 
+## Shortcuts on Hermes (#1180)
+
+New Chat and New Chat with Voice on an active Hermes server, signed in or not, open a new session
+there (`HermesNewChatDestination.onActiveServer`), never a webui server; on a webui server they are
+unchanged. New Chat in Profile takes a `ProfileEntity`: a Hermes server's Profile is
+`<server URL>|<profile>`, so the same name on two servers is two choices, and queues
+`new-chat-profile?server=…&profile=…`. A bare id is a webui profile and keeps its webui route, so
+a Shortcut saved before #1180 opens as it did (#971); every bare id resolves through
+`ProfileEntityProvider.profileServer`, the one place #707 can redirect them.
+
+`PendingLinks.hermesNewChat` routes from the registry and auth state as a session link does: a
+removed server drops it, another active server is switched away from, a signed-out server holds it
+for sign-in. The home turns to Sessions and the list opens `.new(profile:)` over whatever covers
+its rows, in the Shortcut's Profile or the one New Session uses, once the list has settled that
+Profile and while the host answers (New Session is off offline). The voice variant starts
+dictation (`HermesSessionChat.autoStartsVoiceInput`). A Profile is a bot: it is listed once and
+opens a new session, never its Bot Chat.
+
+The picker (`ProfileEntityQuery.suggestedEntities`) has a section per configured server, untitled
+when only one server lists anything. A Hermes section reads the public `GET /api/status`
+`profiles` (names only, reported behind the sign-in too) with the server's saved Connection
+Headers and no sign-in, titled by the name the Bots roster last showed
+(`HermesProfileNameCache`, app group, per server, written on every roster read, kept across sign-out,
+deleted with the server) with the Profile's name under it. An unreadable host lists that cache. A
+webui section, "<server> (Web UI)", is the `profileServer` list with its model · provider subtitle.
+A saved Hermes id resolves from the id while its server is configured, without a network read.
+
 ## Bot lifecycle
 
 The inbox's `+` button and a row's context menu create, duplicate and delete
@@ -1778,8 +1805,8 @@ bot chats push on from the inbox. It has no title of its own: the back button
 and its search / new / connection toolbar are the whole header.
 
 New Bot code belongs only to the main app and XCTest target, apart from the Live
-Activity below. Share-extension and App Intent commands still route to webui
-sessions.
+Activity below. Share-extension commands still route to webui sessions; App Intents
+open Hermes sessions on a Hermes server (#1180).
 Existing external entry points (session deep links, App Intents, shared imports,
 webui push) replace the navigation destination, which pops an open Bots inbox.
 

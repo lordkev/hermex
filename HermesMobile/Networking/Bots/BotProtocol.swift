@@ -298,6 +298,9 @@ struct BotHostStatus: Equatable {
     var heartbeatStale: Double?
     var platformsConnected: Int?
     var platformsConfigured: Int?
+    /// Every Profile's name, which the host reports even behind its sign-in (#1180); nil when
+    /// it reports none.
+    var profiles: [String]?
 
     init(_ json: BotJSON) {
         version = json["version"].text
@@ -307,6 +310,11 @@ struct BotHostStatus: Equatable {
         heartbeatStale = json["gateway_heartbeat_stale_s"].number
         platformsConnected = json["components"]["platforms"]["connected"].integer
         platformsConfigured = json["components"]["platforms"]["configured"].integer
+        profiles = json["profiles"].list.map { items in
+            var seen = Set<String>()
+            return items.compactMap { $0.text?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && seen.insert($0).inserted }
+        }
     }
 }
 

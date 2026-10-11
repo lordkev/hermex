@@ -72,6 +72,8 @@ struct HermesSessionChat: Hashable, Identifiable {
     /// link opened (#1176) shares the list row's copy and draft before any cached row names the
     /// root. Nil asks the cache, else takes the key.
     var lineageRoot: String? = nil
+    /// New Chat with Voice opened it on a Hermes server (#1180): its composer starts dictation.
+    var autoStartsVoiceInput = false
 
     /// What the chat lets the user do (#1145): a bot's Bot Chat keeps Bot Chat's rules.
     var policy: HermesChatPolicy { HermesChatPolicy(target: target, botChatRoot: botChatRoot) }

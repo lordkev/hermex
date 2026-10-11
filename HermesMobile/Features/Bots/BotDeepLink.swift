@@ -13,7 +13,6 @@ struct BotDestination: Equatable, Hashable {
 }
 
 extension HermesDeepLink {
-    private static let serverQueryItem = "server"
     private static let connectionQueryItem = "connection"
     private static let conversationQueryItem = "conversation"
 

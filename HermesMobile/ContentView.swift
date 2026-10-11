@@ -8,8 +8,8 @@ struct ContentView: View {
     @State private var hasWaitingSharedImport = false
     @State private var hasRoutedSharedImport = false
     @State private var pendingLinks = PendingLinks()
-    /// Shown when a new chat, session link or share arrives while a Hermes server is
-    /// active and no webui server is configured to take it (#899).
+    /// Shown when a webui Profile's new chat, a legacy session link or a share arrives while a
+    /// Hermes server is active and no webui server is configured to take it (#899).
     @State private var isShowingNoWebuiServer = false
     /// The share that alert offers to discard; nil for a new chat or session link.
     @State private var unroutableShare: SharedImportReservation?
@@ -107,7 +107,8 @@ struct ContentView: View {
                 .id(server)
         case .loggedIn(let server) where authManager.kind(of: server) == .hermes:
             HermesServerHome(authManager: authManager, server: server, pendingBotDestination: $pendingLinks.bot,
-                             pendingSessionDestination: $pendingLinks.hermesSession)
+                             pendingSessionDestination: $pendingLinks.hermesSession,
+                             pendingNewChat: $pendingLinks.hermesNewChat)
                 .id(server)
         case .loggedOut(let server):
             OnboardingView(authManager: authManager, savedServer: server)
@@ -137,6 +138,7 @@ struct ContentView: View {
         Task { await AgentLiveActivityManager.shared.dismissFinishedActivity(from: url) }
         pendingLinks.webuiPush = nil
         pendingLinks.hermesSession = nil
+        pendingLinks.hermesNewChat = nil
         if let destination = WebuiPushDestination(url: url) {
             switchServer(pendingLinks.open(destination, state: authManager.state, servers: authManager.servers))
             return
@@ -146,7 +148,14 @@ struct ContentView: View {
         // even if the previous one's value still lingers downstream. The voice variant carries
         // `autoStartsVoiceInput` so the composer begins dictation once it appears (#338).
         if HermesDeepLink.isNewChatVoiceURL(url) {
-            if reachWebuiServer() { pendingLinks.newChatRequest = NewChatRequest(autoStartsVoiceInput: true) }
+            openNewChat(autoStartsVoiceInput: true)
+            return
+        }
+
+        // A Hermes server's Profile opens a new session on that server (#1180), switching to it
+        // or waiting for its sign-in first.
+        if let destination = HermesNewChatDestination(url: url) {
+            switchServer(pendingLinks.open(destination, state: authManager.state, servers: authManager.servers))
             return
         }
 
@@ -163,7 +172,7 @@ struct ContentView: View {
         }
 
         if HermesDeepLink.isNewChatURL(url) {
-            if reachWebuiServer() { pendingLinks.newChatRequest = NewChatRequest(autoStartsVoiceInput: false) }
+            openNewChat(autoStartsVoiceInput: false)
             return
         }
 
@@ -199,8 +208,19 @@ struct ContentView: View {
         if let account { authManager.switchActiveServer(to: account) }
     }
 
-    /// Readies a webui-only entry point (a new-chat intent or link, a session link, a
-    /// share) and returns whether it can go ahead. While a Hermes server is active it
+    /// New Chat and New Chat with Voice: a new Hermes session on an active Hermes server, in
+    /// the Profile its New Session uses (#1180), else the webui New Chat composer.
+    private func openNewChat(autoStartsVoiceInput: Bool) {
+        if let hermes = HermesNewChatDestination.onActiveServer(state: authManager.state, servers: authManager.servers,
+                                                                autoStartsVoiceInput: autoStartsVoiceInput) {
+            switchServer(pendingLinks.open(hermes, state: authManager.state, servers: authManager.servers))
+        } else if reachWebuiServer() {
+            pendingLinks.newChatRequest = NewChatRequest(autoStartsVoiceInput: autoStartsVoiceInput)
+        }
+    }
+
+    /// Readies a webui-only entry point (a webui Profile's New Chat in Profile, a legacy
+    /// session link, a share) and returns whether it can go ahead. While a Hermes server is active it
     /// switches to the first webui server, as a webui push tap does, and the rebuilt
     /// session list takes the held request. With no webui server it shows why and returns
     /// false. On a webui server, or with nothing configured, there is nothing to do.
@@ -319,12 +339,14 @@ enum WebuiEntryRoute: Equatable {
 /// servers on a hold, and takes the home's bar (`HermesHomeChrome`). The home keeps both sides'
 /// state, so a switch shows the last roster or rows at once while they refresh. It opens on the
 /// side last shown, Sessions at first, and a Bot link (a push tap, a search hit) turns it to Bots,
-/// where the inbox opens it. A session link (#1176) turns it to Sessions, where the list opens it.
+/// where the inbox opens it. A session link (#1176) or a Shortcut's new session (#1180) turns it to
+/// Sessions, where the list opens it.
 struct HermesServerHome: View {
     @Bindable var authManager: AuthManager
     let server: URL
     @Binding var pendingBotDestination: BotDestination?
     @Binding var pendingSessionDestination: HermesSessionDestination?
+    @Binding var pendingNewChat: HermesNewChatDestination?
     @SceneStorage("hermesHome.tab") private var tab = HermesHomeTab.sessions
     @State private var inbox: BotInbox
     /// The Sessions side's list on the saved Bot connection, read again each time a side shows,
@@ -335,11 +357,12 @@ struct HermesServerHome: View {
     @State private var isPresentingAddServer = false
 
     init(authManager: AuthManager, server: URL, pendingBotDestination: Binding<BotDestination?>,
-         pendingSessionDestination: Binding<HermesSessionDestination?>) {
+         pendingSessionDestination: Binding<HermesSessionDestination?>, pendingNewChat: Binding<HermesNewChatDestination?>) {
         self.authManager = authManager
         self.server = server
         _pendingBotDestination = pendingBotDestination
         _pendingSessionDestination = pendingSessionDestination
+        _pendingNewChat = pendingNewChat
         _inbox = State(initialValue: BotInbox(server: server))
         _sessions = State(initialValue: HermesSessionsSide(server: server))
     }
@@ -352,7 +375,7 @@ struct HermesServerHome: View {
                 // Without a saved connection the inbox's welcome sets one up.
                 if tab == .sessions, let sessions {
                     HermesSessionListView(entry: sessions.entry, model: sessions.model, home: home,
-                                          pendingLink: $pendingSessionDestination)
+                                          pendingLink: $pendingSessionDestination, pendingNewChat: $pendingNewChat)
                         .id(sessions.entry.id)
                 } else {
                     BotsInboxView(server: server, pendingDestination: $pendingBotDestination, home: home, inbox: inbox)
@@ -379,6 +402,12 @@ struct HermesServerHome: View {
         .onChange(of: pendingSessionDestination, initial: true) {
             guard pendingSessionDestination != nil else { return }
             if sessions == nil { pendingSessionDestination = nil; return }
+            tab = .sessions; isShowingSettings = false; isPresentingAddServer = false
+        }
+        // So does a Shortcut's new session (#1180), which the list opens.
+        .onChange(of: pendingNewChat, initial: true) {
+            guard pendingNewChat != nil else { return }
+            if sessions == nil { pendingNewChat = nil; return }
             tab = .sessions; isShowingSettings = false; isPresentingAddServer = false
         }
         .sheet(isPresented: $isPresentingAddServer) {
@@ -567,6 +596,9 @@ struct PendingLinks {
     /// The Hermes session a link named (#1176). The Hermes home turns to Sessions, whose list
     /// looks it up.
     var hermesSession: HermesSessionDestination?
+    /// The new Hermes session a Shortcut asked for (#1180). The Hermes home turns to Sessions,
+    /// whose list opens it.
+    var hermesNewChat: HermesNewChatDestination?
 
     /// A webui conversation link replaces whatever other link was waiting.
     @MainActor mutating func open(_ destination: WebuiPushDestination, state: AuthManager.State,
@@ -578,6 +610,13 @@ struct PendingLinks {
     /// So does a Hermes session link, so a sign-in it waits for never routes an older link to a
     /// server it doesn't name first (#1176).
     @MainActor mutating func open(_ destination: HermesSessionDestination, state: AuthManager.State,
+                                  servers: [ServerAccount]) -> ServerAccount? {
+        self = PendingLinks()
+        return route(destination, state: state, servers: servers)
+    }
+
+    /// So does a Shortcut's new Hermes session (#1180).
+    @MainActor mutating func open(_ destination: HermesNewChatDestination, state: AuthManager.State,
                                   servers: [ServerAccount]) -> ServerAccount? {
         self = PendingLinks()
         return route(destination, state: state, servers: servers)
@@ -596,7 +635,23 @@ struct PendingLinks {
                             botConnectionID: botConnectionID) ?? account
         }
         if let hermesSession { account = route(hermesSession, state: state, servers: servers) ?? account }
+        if let hermesNewChat { account = route(hermesNewChat, state: state, servers: servers) ?? account }
         return account
+    }
+
+    /// A new Hermes session: dropped when its server is gone, else held while it signs in or activates.
+    @MainActor private mutating func route(_ destination: HermesNewChatDestination, state: AuthManager.State,
+                                           servers: [ServerAccount]) -> ServerAccount? {
+        switch destination.route(state: state, servers: servers) {
+        case .ignore:
+            hermesNewChat = nil
+        case .waitForSignIn, .open:
+            hermesNewChat = destination
+        case .switchServer(let account):
+            hermesNewChat = destination
+            return account
+        }
+        return nil
     }
 
     @MainActor private mutating func route(_ destination: WebuiPushDestination, state: AuthManager.State,

@@ -497,13 +497,15 @@ struct ChatView: View {
     /// reaches the webui API; connection errors show in the chat itself. A bot's Bot Chat
     /// (#1145) shows the bot's pill in place of the title, keeps Bot Chat's rules
     /// (`HermesChatPolicy`) and calls `onChatReplaced` when its linked root was replaced. Update
-    /// sign-in goes through the environment's `HermesUpdateSignInAction`.
+    /// sign-in goes through the environment's `HermesUpdateSignInAction`. New Chat with Voice's
+    /// chat (#1180) starts dictation.
     init(hermesSession: HermesSessionChat, onReplace: ((HermesSessionChat) -> Void)? = nil,
          onOpenSessions: ((HermesSessionListEntry) -> Void)? = nil, onChatReplaced: (() -> Void)? = nil) {
         self.init(
             session: SessionSummary(profile: hermesSession.target.profile),
             server: hermesSession.server,
             onAPIError: { _ in },
+            autoStartsVoiceInput: hermesSession.autoStartsVoiceInput,
             hermesSession: hermesSession,
             onReplaceHermesSession: onReplace,
             onOpenHermesSessions: onOpenSessions,

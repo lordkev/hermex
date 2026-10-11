@@ -14,6 +14,7 @@ final class AppIntentNewChatInProfileTests: XCTestCase {
 
     override func tearDown() async throws {
         await MainActor.run { AppIntentRouter.shared.pendingDeepLink = nil }
+        ProfileStatusFixture.replies = [:]
         try await super.tearDown()
     }
 
@@ -36,6 +37,146 @@ final class AppIntentNewChatInProfileTests: XCTestCase {
                        "The webui server New Chat in Profile switches to")
         XCTAssertNil(profileServer("https://hermes.example", [hermes]))
         XCTAssertNil(profileServer(nil, [first]))
+    }
+
+    // MARK: - Hermes servers' Profiles (#1180)
+
+    private func account(_ id: String, _ kind: ServerKind, named name: String) -> ServerAccount {
+        var named = account(id, kind)
+        named.displayName = name
+        return named
+    }
+
+    func testAHermesProfileIdNamesItsServerAndRoundTrips() throws {
+        let studio = try XCTUnwrap(URL(string: "https://studio.test"))
+        let entity = ProfileEntity(hermesServer: studio, profile: "inbox-triage", title: "Inbox Triage")
+        XCTAssertEqual(entity.id, "https://studio.test|inbox-triage")
+        XCTAssertEqual(entity.name, "Inbox Triage")
+        XCTAssertEqual(entity.subtitle, "inbox-triage")
+        XCTAssertEqual(entity.hermesNewChat?.server, studio)
+        XCTAssertEqual(entity.hermesNewChat?.profile, "inbox-triage")
+
+        let unnamed = ProfileEntity(hermesServer: studio, profile: "dev", title: nil)
+        XCTAssertEqual(unnamed.name, "dev", "A Profile the roster never named is titled by its own name")
+        XCTAssertNil(unnamed.subtitle)
+    }
+
+    func testABareIdStaysAWebuiProfile() {
+        XCTAssertNil(ProfileEntity(id: "dev", name: "dev", subtitle: nil).hermesNewChat)
+        XCTAssertNil(ProfileEntity(id: "a|b", name: "a|b", subtitle: nil).hermesNewChat)
+    }
+
+    @MainActor
+    func testAHermesProfileQueuesALinkToItsServer() async throws {
+        let studio = try XCTUnwrap(URL(string: "https://studio.test"))
+        let intent = NewChatInProfileIntent()
+        intent.profile = ProfileEntity(hermesServer: studio, profile: "inbox-triage", title: "Inbox Triage")
+        _ = try await intent.perform()
+
+        let url = try XCTUnwrap(AppIntentRouter.shared.pendingDeepLink)
+        let destination = try XCTUnwrap(HermesNewChatDestination(url: url))
+        XCTAssertEqual(destination.server, studio)
+        XCTAssertEqual(destination.profile, "inbox-triage")
+        XCTAssertFalse(destination.autoStartsVoiceInput)
+    }
+
+    func testASavedBareProfileLinkKeepsItsWebuiRoute() throws {
+        let url = try XCTUnwrap(HermesDeepLink.newChatInProfileURL(profileName: "dev"))
+        XCTAssertNil(HermesNewChatDestination(url: url))
+        XCTAssertEqual(HermesDeepLink.profileName(fromNewChatInProfile: url), "dev")
+    }
+
+    @MainActor
+    func testThePickerHasOneSectionPerServer() async throws {
+        let studio = account("https://studio.test", .hermes, named: "Studio Mac")
+        let laptop = account("https://laptop.test", .webui, named: "Laptop")
+        let air = account("https://air.test", .hermes, named: "")
+        ProfileStatusFixture.replies = [
+            "studio.test": (200, #"{"version":"0.21.5","profiles":["default","inbox-triage"],"auth_required":true}"#),
+            "air.test": (200, #"{"profiles":["default"," ",7]}"#)
+        ]
+        let (names, suite, defaults) = makeIsolatedNames()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        names.save([.init(profile: "default", title: "Hermes"), .init(profile: "inbox-triage", title: "Inbox Triage")],
+                   for: URL(string: "https://studio.test")!)
+
+        let sections = await ProfileEntityProvider.sections(
+            servers: [studio, laptop, air], active: URL(string: "https://studio.test"), names: names,
+            webui: { [ProfileEntity(id: "default", name: "Default", subtitle: "gpt-6 · openai")] },
+            liveNames: Self.liveNames
+        )
+
+        XCTAssertEqual(sections.map(\.title), ["Studio Mac", String(localized: "Laptop (Web UI)"), "air.test"])
+        XCTAssertEqual(sections[0].profiles.map(\.id), ["https://studio.test|default", "https://studio.test|inbox-triage"])
+        XCTAssertEqual(sections[0].profiles.map(\.name), ["Hermes", "Inbox Triage"])
+        XCTAssertEqual(sections[0].profiles.map(\.subtitle), ["default", "inbox-triage"])
+        XCTAssertEqual(sections[1].profiles.map(\.id), ["default"], "A webui Profile keeps its bare id")
+        XCTAssertEqual(sections[2].profiles.map(\.id), ["https://air.test|default"],
+                       "The same Profile on another server is another choice")
+    }
+
+    @MainActor
+    func testAnUnreadableHostListsItsCachedNames() async throws {
+        let studio = account("https://studio.test", .hermes, named: "Studio Mac")
+        let air = account("https://air.test", .hermes, named: "Air")
+        ProfileStatusFixture.replies = ["studio.test": (502, "Bad gateway")]
+        let (names, suite, defaults) = makeIsolatedNames()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        names.save([.init(profile: "default", title: "Hermes")], for: URL(string: "https://studio.test")!)
+        names.save([.init(profile: "dev", title: "Dev Bot")], for: URL(string: "https://elsewhere.test")!)
+
+        let sections = await ProfileEntityProvider.sections(
+            servers: [studio, air], active: URL(string: "https://studio.test"), names: names,
+            webui: { XCTFail("No webui server is configured"); return [] }, liveNames: Self.liveNames
+        )
+
+        XCTAssertEqual(sections.map(\.title), ["Studio Mac"], "A host with no names to show has no section")
+        XCTAssertEqual(sections.first?.profiles.map(\.id), ["https://studio.test|default"])
+        XCTAssertEqual(sections.first?.profiles.map(\.name), ["Hermes"])
+    }
+
+    @MainActor
+    func testSavedShortcutsResolveHermesIdsFromTheirConfiguredServer() async throws {
+        let studio = account("https://studio.test", .hermes, named: "Studio Mac")
+        let (names, suite, defaults) = makeIsolatedNames()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        names.save([.init(profile: "inbox-triage", title: "Inbox Triage")], for: URL(string: "https://studio.test")!)
+
+        let resolved = await ProfileEntityProvider.entities(
+            for: ["https://studio.test|inbox-triage", "https://gone.test|dev", "dev"], servers: [studio], names: names,
+            webui: { [ProfileEntity(id: "dev", name: "Dev", subtitle: nil)] }
+        )
+
+        XCTAssertEqual(resolved.map(\.id), ["https://studio.test|inbox-triage", "dev"],
+                       "A removed server's Profile no longer resolves; a bare id resolves as before")
+        XCTAssertEqual(resolved.first?.name, "Inbox Triage")
+    }
+
+    func testTheNameCacheIsPerServer() throws {
+        let (names, suite, defaults) = makeIsolatedNames()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let studio = try XCTUnwrap(URL(string: "https://studio.test")), air = try XCTUnwrap(URL(string: "https://air.test"))
+
+        XCTAssertTrue(names.save([.init(profile: "default", title: "Hermes")], for: studio))
+        XCTAssertFalse(names.save([.init(profile: "default", title: "Hermes")], for: studio), "An identical roster is no change")
+        XCTAssertTrue(names.save([.init(profile: "default", title: "Air")], for: air))
+        names.remove(server: studio)
+
+        XCTAssertEqual(names.names(for: studio), [])
+        XCTAssertEqual(names.names(for: air), [.init(profile: "default", title: "Air")])
+    }
+
+    /// `/api/status` through `ProfileStatusFixture`, as the picker reads it.
+    private static let liveNames: @Sendable (ServerAccount) async -> [String]? = { account in
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ProfileStatusFixture.self]
+        return await ProfileEntityProvider.liveProfileNames(of: account, probe: BotHostStatusProbe(configuration: configuration))
+    }
+
+    private func makeIsolatedNames() -> (HermesProfileNameCache, String, UserDefaults) {
+        let suite = "test.hermesprofilenames.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        return (HermesProfileNameCache(defaults: defaults), suite, defaults)
     }
 
     func testWebuiEntryPointsLeaveAHermesServerForTheFirstWebuiServer() {
@@ -243,4 +384,22 @@ final class AppIntentNewChatInProfileTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         return (ProfileEntityCache(defaults: defaults), suite, defaults)
     }
+}
+
+/// Answers `/api/status` per host from `replies`; any other host can't be reached.
+private final class ProfileStatusFixture: URLProtocol {
+    nonisolated(unsafe) static var replies: [String: (Int, String)] = [:]
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url, url.path == "/api/status", let (status, body) = Self.replies[url.host ?? ""] else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
