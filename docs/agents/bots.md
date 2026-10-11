@@ -1895,7 +1895,10 @@ avatar and `BotLiveActivity.countChips` for the work counts.
 - **Ownership.** Before every stale or end call the chat checks
   `drivenSessionID`, so an activity a webui run or another bot took over is never
   touched. Token rotation and retirement are serialized: an in-flight registration
-  must be cleaned up before its replacement can register the same session. Ending,
+  must be cleaned up before its replacement can register the same session. Those
+  checks compare the relay's route (relay, install, device token, session), not the
+  configured server, so removing one of two entries for one host (#1178) never deletes
+  the route the other registered. Ending,
   dismissal, and server unpairing retire registrations. Cold launch observes paired
   activities without resuming their chats; legacy/unpaired bot activities are removed
   (`LeftoverLiveActivitySettlement`). Its decisions apply only to an activity no chat

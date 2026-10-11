@@ -421,11 +421,27 @@ extension PushRegistrar: PushPairingEnabling {}
         let sessionID: String
         let token: String
     }
+    /// What the relay keys an activity registration by. Two entries for one host (#1178)
+    /// share it, so a cleanup checks it rather than the configured server.
+    private struct Route: Equatable {
+        let relayURL: URL
+        let installKey: String
+        let deviceToken: String
+        let sessionID: String
+
+        init(_ pairing: PushPairing, deviceToken: String, sessionID: String) {
+            relayURL = pairing.relayURL
+            installKey = pairing.installKey
+            self.deviceToken = deviceToken
+            self.sessionID = sessionID
+        }
+    }
     private struct Registered {
         let desired: Desired
         let pairing: PushPairing
         let deviceToken: String
         var confirmed = true
+        var route: Route { Route(pairing, deviceToken: deviceToken, sessionID: desired.sessionID) }
     }
     private let relay: any PushActivityRelaying
     private let pairing: (URL) -> PushPairing?
@@ -497,7 +513,7 @@ extension PushRegistrar: PushPairingEnabling {}
         // A persisted activity may end before this process ever saw its token.
         if registered[owner] == nil, let server, let sessionID,
            let keys = pairing(server), let device = keys.registeredToken,
-           !registered.values.contains(where: { $0.desired.server == server && $0.desired.sessionID == sessionID }) {
+           !registered.values.contains(where: { $0.route == Route(keys, deviceToken: device, sessionID: sessionID) }) {
             registered[owner] = Registered(desired: Desired(server: server, sessionID: sessionID, token: ""),
                                            pairing: keys, deviceToken: device)
         }
@@ -529,9 +545,9 @@ extension PushRegistrar: PushPairingEnabling {}
     private func reconcile(_ owner: String, republish: Bool) async {
         // Failed retirement must block a replacement on that route; otherwise a
         // retry of the old DELETE could revoke the replacement's token.
-        if let next = desired[owner] {
-            for (other, old) in registered where other != owner && desired[other] == nil
-                && old.desired.server == next.server && old.desired.sessionID == next.sessionID {
+        if let next = desired[owner], let keys = pairing(next.server), let device = keys.registeredToken {
+            let route = Route(keys, deviceToken: device, sessionID: next.sessionID)
+            for (other, old) in registered where other != owner && desired[other] == nil && old.route == route {
                 do {
                     try await relay.deleteActivity(sessionID: old.desired.sessionID, deviceToken: old.deviceToken, pairing: old.pairing)
                     registered[other] = nil
@@ -543,8 +559,7 @@ extension PushRegistrar: PushPairingEnabling {}
                 guard republish || !old.confirmed else { return }
                 registered[owner]?.confirmed = false
             } else if desired[owner] == nil, registered.contains(where: { other, record in
-                other != owner && record.desired.server == old.desired.server
-                    && record.desired.sessionID == old.desired.sessionID
+                other != owner && record.route == old.route
             }) {
                 // A newer activity's PUT, settled while this cleanup waited in line, replaced
                 // the route; a DELETE now would revoke it (#566). A failed PUT leaves no

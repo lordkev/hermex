@@ -1271,6 +1271,40 @@ final class PushRegistrationTests: XCTestCase {
         XCTAssertFalse(registrar.isRegistered("new"))
     }
 
+    /// Two entries for one host (#1178) share the relay route: same relay, install, device
+    /// and session. A's failed retirement blocks B's PUT on that route until it succeeds, so
+    /// removing A afterwards cannot delete the route B registered under the moved key.
+    func testRemovingASharedEntryKeepsTheOtherEntrysActivityRoute() async {
+        let wire = ActivityRelaySpy()
+        let keys = PushPairing(relayURL: relay, installKey: installA, previewKey: "k", registeredToken: "device")
+        let registrar = PushActivityRegistrar(relay: wire, pairing: { _ in keys })
+        await registrar.register(owner: "a", server: serverA, sessionID: "tip", token: "a")
+        await registrar.register(owner: "a", server: serverA, sessionID: "tip-2", token: "a")
+        wire.failure = true
+        await registrar.retire(owner: "a")
+        wire.failure = false
+        await registrar.register(owner: "b", server: serverB, sessionID: "tip-2", token: "b")
+        await registrar.forget(server: serverA)
+        XCTAssertEqual(wire.calls.map(\.action), ["put:a", "delete", "put:a", "delete", "delete", "put:b"])
+        XCTAssertEqual(wire.calls.map(\.session), ["tip", "tip", "tip-2", "tip-2", "tip-2", "tip-2"])
+        XCTAssertTrue(registrar.isRegistered("b"))
+    }
+
+    /// Once B's PUT replaced A's route on the shared install, neither A's retirement nor a
+    /// relaunched activity's cleanup on A deletes it.
+    func testCleanupOnASharedEntrySparesTheRouteTheOtherEntryReplaced() async {
+        let wire = ActivityRelaySpy()
+        let keys = PushPairing(relayURL: relay, installKey: installA, previewKey: "k", registeredToken: "device")
+        let registrar = PushActivityRegistrar(relay: wire, pairing: { _ in keys })
+        await registrar.register(owner: "a", server: serverA, sessionID: "runtime", token: "a")
+        await registrar.register(owner: "b", server: serverB, sessionID: "runtime", token: "b")
+        await registrar.retire(owner: "a")
+        await registrar.retire(owner: "persisted", server: serverA, sessionID: "runtime")
+        await registrar.forget(server: serverA)
+        XCTAssertEqual(wire.calls.map(\.action), ["put:a", "put:b"])
+        XCTAssertTrue(registrar.isRegistered("b"))
+    }
+
     // MARK: - Keychain access group
 
     /// The real store, in the real shared access group: the pairing round-trips,
