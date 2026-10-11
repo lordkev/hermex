@@ -101,20 +101,17 @@ enum HermesSessionLinkOutcome: Equatable {
         // A subagent's push names the child; the user follows the session that delegated to it
         // (#1177), in the child's Profile. `delegate_task` stamps `_delegate_from` on the child and
         // every compression segment inherits it, so a marked row names its delegator outright.
-        // A host without the mark climbs the subagent's own compression chain, since a subagent
-        // that compressed pushes from its newest segment, and goes one hop up from its first; a
-        // chain the walk can't finish leaves that hop unproven and opens nothing. A child naming
-        // no parent opens itself.
+        // A host without the mark goes one hop up, unless that parent ended in compression: it
+        // could be the subagent's own earlier segment or a delegator that compressed, so the
+        // boundary is unproven and nothing opens. A child naming no parent opens itself.
         if destination.opensParent {
             if let delegator = hit.row.modelConfigText("_delegate_from"), !delegator.isEmpty {
                 guard let row = try await exactRow(delegator, profile: hit.profile, on: wire) else { return .gone }
                 hit.row = row
-            } else {
-                guard let first = try await lineageRoot(of: hit.row, profile: hit.profile, on: wire) else { return .gone }
-                if let parent = first["parent_session_id"].text, !parent.isEmpty {
-                    guard let row = try await exactRow(parent, profile: hit.profile, on: wire) else { return .gone }
-                    hit.row = row
-                }
+            } else if let parent = hit.row["parent_session_id"].text, !parent.isEmpty {
+                guard let row = try await exactRow(parent, profile: hit.profile, on: wire),
+                      row["end_reason"].text != "compression" else { return .gone }
+                hit.row = row
             }
         }
         let row = try await listRow(hit.row, profile: hit.profile, on: wire)

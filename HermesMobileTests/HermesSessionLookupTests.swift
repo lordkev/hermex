@@ -193,7 +193,8 @@ import XCTest
 
     /// A subagent that compressed under legacy compression pushes from its newest segment, which
     /// inherits `_delegate_from`: its link opens that delegator, even one that itself later
-    /// compressed. A host without the marker climbs the subagent's compression chain, then one hop.
+    /// compressed. Without the marker, a parent that ended in compression is either the subagent's
+    /// own earlier segment or a delegator that compressed, so the link opens nothing.
     func testACompressedSubagentLinkOpensItsDelegator() async throws {
         let wire = LookupWire()
         wire.rows = ["research": [
@@ -203,23 +204,30 @@ import XCTest
             "start": row("start", "research", endReason: "user_exit"),
             "old-c1": row("old-c1", "research", title: nil, parent: "old-c0"),
             "old-c0": row("old-c0", "research", title: "Subtask", parent: "old-p", endReason: "compression"),
-            "old-p": row("old-p", "research", title: "Planning")
+            "old-p": row("old-p", "research", title: "Planning"),
+            "kid": row("kid", "research", title: "Subtask", parent: "p"),
+            "root-kid": row("root-kid", "research", title: "Subtask", parent: "lone"),
+            "lone": row("lone", "research", title: "Planning", endReason: "compression")
         ]]
-        func resolve(_ key: String) async throws -> SessionSummary {
-            try found(try await HermesSessionLookup.resolve(
-                HermesSessionDestination(server: server, profile: "research", key: key, opensParent: true), on: wire))
+        func resolve(_ key: String) async throws -> HermesSessionLookup.Outcome {
+            try await HermesSessionLookup.resolve(
+                HermesSessionDestination(server: server, profile: "research", key: key, opensParent: true), on: wire)
         }
 
-        let delegator = try await resolve("c1")
+        let delegator = try found(try await resolve("c1"))
         XCTAssertEqual(delegator.sessionId, "p")
         XCTAssertEqual(delegator.title, "Planning")
-        let unmarked = try await resolve("old-c1")
-        XCTAssertEqual(unmarked.sessionId, "old-p")
+        let unmarkedSegment = try await resolve("old-c1")
+        XCTAssertEqual(unmarkedSegment, .gone)
+        let compressedDelegator = try await resolve("kid")
+        XCTAssertEqual(compressedDelegator, .gone, "Never climbs past a delegator that compressed")
+        let compressedRootDelegator = try await resolve("root-kid")
+        XCTAssertEqual(compressedRootDelegator, .gone, "Never falls back to the child")
     }
 
     /// A subagent that compressed nine times, past the lineage walk's eight hops: a marked
-    /// segment opens its `_delegate_from` key directly, and an unmarked chain the walk can't
-    /// finish opens nothing rather than one of the subagent's own earlier segments.
+    /// segment opens its `_delegate_from` key directly, and an unmarked chain opens nothing
+    /// rather than one of the subagent's own earlier segments.
     func testASubagentPastTheLineageLimitOpensItsDelegatorOnlyWhenMarked() async throws {
         func chain(marked: Bool) -> [String: BotJSON] {
             var rows = ["p": row("p", "research", title: "Planning"),
