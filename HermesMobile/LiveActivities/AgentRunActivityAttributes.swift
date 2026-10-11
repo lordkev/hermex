@@ -186,10 +186,15 @@ struct AgentRunActivityAttributes: ActivityAttributes {
     /// started (#1179). A legacy compression can move it mid-turn; the app then registers
     /// the token under the new key. Nil for a webui run and a bot, and for an older build's.
     var pushSessionID: String?
+    /// True when the activity asked ActivityKit for a push token: only then can the relay
+    /// drive it after a relaunch, so a Hermes session's activity started before its server
+    /// paired is settled against the host instead (#1179). Nil otherwise, and for an older
+    /// build's; a bot's always asks.
+    var requestedPush: Bool?
 
     init(sessionID: String, sessionTitle: String, streamID: String? = nil, startedAt: Date,
          bot: AgentRunActivityBot? = nil, server: URL? = nil, destinationURL: URL? = nil,
-         pushSessionID: String? = nil) {
+         pushSessionID: String? = nil, requestedPush: Bool? = nil) {
         self.sessionID = sessionID
         self.sessionTitle = AgentRunActivitySanitizer.sessionTitle(sessionTitle)
         self.streamID = AgentLiveActivityReusePolicy.normalizedStreamID(streamID)
@@ -198,6 +203,7 @@ struct AgentRunActivityAttributes: ActivityAttributes {
         self.server = server
         self.destinationURL = destinationURL
         self.pushSessionID = pushSessionID
+        self.requestedPush = requestedPush
     }
 }
 

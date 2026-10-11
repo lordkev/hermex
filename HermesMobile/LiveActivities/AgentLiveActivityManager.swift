@@ -610,13 +610,14 @@ final class AgentLiveActivityManager: AgentLiveActivityManaging {
     }
 
     /// Settles the activities a previous launch left (`LeftoverLiveActivitySettlement`) without
-    /// resuming any session. A paired bot's or Hermes session's is adopted, since the relay
-    /// drives it; an unpaired bot's has no background source of truth and ends. A finished one
-    /// releases its relay registration, so it no longer holds its session's banners; the
-    /// registrar never deletes a route a new activity for that session is registering (#642).
-    /// An unpaired Hermes session's on `hermes`'s server ends as complete unless the host still
-    /// runs it. A running webui activity is left to the server-status reconciler (#566). Every
-    /// decision uses the stored key the activity's pushes last moved to (`LiveActivityPushKeys`).
+    /// resuming any session. A paired bot's, or a paired Hermes session's that asked for pushes,
+    /// is adopted, since the relay drives it; an unpaired bot's has no background source of truth
+    /// and ends. A finished one releases its relay registration, so it no longer holds its
+    /// session's banners; the registrar never deletes a route a new activity for that session is
+    /// registering (#642). Any other Hermes session's on `hermes`'s server ends as complete unless
+    /// the host still runs it. A running webui activity is left to the server-status reconciler
+    /// (#566). Every decision uses the stored key the activity's pushes last moved to
+    /// (`LiveActivityPushKeys`).
     func settleActivitiesFromPreviousLaunch(checking hermes: HermesRunCheck? = nil) async {
         let persisted = Activity<AgentRunActivityAttributes>.activities
         // Moved keys outlive their activities only until here; the driven turn keeps its own.
@@ -845,6 +846,9 @@ final class AgentLiveActivityManager: AgentLiveActivityManaging {
                 return
             }
 
+            // Every bot asks for a token; a webui run or a Hermes session asks only when its
+            // server is paired, so users without push see no change (#566, #1179).
+            let wantsPushToken = bot != nil || server.map(isPaired) == true
             let attributes = AgentRunActivityAttributes(
                 sessionID: sessionID,
                 sessionTitle: sessionTitle,
@@ -853,11 +857,9 @@ final class AgentLiveActivityManager: AgentLiveActivityManaging {
                 bot: bot,
                 server: server,
                 destinationURL: destinationURL,
-                pushSessionID: pushSessionID
+                pushSessionID: pushSessionID,
+                requestedPush: wantsPushToken ? true : nil
             )
-            // Every bot asks for a token; a webui run or a Hermes session asks only when its
-            // server is paired, so users without push see no change (#566, #1179).
-            let wantsPushToken = bot != nil || server.map(isPaired) == true
             let requestedActivity = try Activity.request(
                 attributes: attributes,
                 content: ActivityContent(state: state, staleDate: staleDate(for: state)),
@@ -1333,11 +1335,11 @@ enum LeftoverLiveActivityAction: Equatable {
 
 /// Decides each leftover activity's action at cold launch, testably. Paired activities are
 /// adopted, finished ones retire, and an unpaired bot's ends. An unpaired Hermes session's
-/// (#1179), when it belongs to the signed-in Hermes server, is checked against one
-/// `session.active_list` read: kept while the host runs one of its keys, including the one its
-/// pushes last moved to, else ended as complete. Another server's, or one the read couldn't
-/// settle, waits for its stale date, and a running webui activity waits for the server-status
-/// reconciler.
+/// (#1179), or one started before its server paired, which has no token to adopt, when it
+/// belongs to the signed-in Hermes server, is checked against one `session.active_list` read:
+/// kept while the host runs one of its keys, including the one its pushes last moved to, else
+/// ended as complete. Another server's, or one the read couldn't settle, waits for its stale
+/// date, and a running webui activity waits for the server-status reconciler.
 @MainActor enum LeftoverLiveActivitySettlement {
     /// The stored keys a `session.active_list` reply runs: each listed `session_key` whose
     /// status isn't `idle`, including a status this build doesn't know, so an unfamiliar state
@@ -1353,7 +1355,11 @@ enum LeftoverLiveActivityAction: Equatable {
     /// `hermesServer` needs it.
     static func actions(for leftovers: [LeftoverLiveActivity], isPaired: (URL) -> Bool, hermesServer: URL?,
                         runningKeys: () async -> Set<String>?) async -> [LeftoverLiveActivityAction] {
-        let paired = leftovers.map { $0.attributes.pushTarget.map { isPaired($0.server) } == true }
+        // A Hermes session's activity started before pairing asked for no token, so nothing drives it.
+        let paired = leftovers.map { leftover in
+            leftover.attributes.pushTarget.map { isPaired($0.server) } == true
+                && (leftover.attributes.bot != nil || leftover.attributes.requestedPush == true)
+        }
         let checked = zip(leftovers, paired).map { leftover, paired in
             leftover.attributes.isHermesSession && !leftover.isFinished && !paired
                 && hermesServer != nil && leftover.attributes.server == hermesServer

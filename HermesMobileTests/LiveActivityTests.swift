@@ -1654,7 +1654,7 @@ final class LiveActivityTests: XCTestCase {
         func hermes(_ id: String, key: String?, on server: URL, finished: Bool = false) -> LeftoverLiveActivity {
             LeftoverLiveActivity(id: id, attributes: AgentRunActivityAttributes(
                 sessionID: "hermes:default:\(key ?? id)", sessionTitle: "Run", startedAt: .now, server: server,
-                pushSessionID: key), isFinished: finished)
+                pushSessionID: key, requestedPush: server == paired ? true : nil), isFinished: finished)
         }
         func bot(_ id: String, on server: URL) throws -> LeftoverLiveActivity {
             var bot = try XCTUnwrap(AgentRunActivityBot(BotDestination(server: server, connectionID: UUID(), profile: "triage")))
@@ -1692,8 +1692,8 @@ final class LiveActivityTests: XCTestCase {
     /// unpaired Hermes run on the signed-in Hermes server, nothing is read at all.
     func testColdLaunchLeavesHermesRunsTheLiveListCannotSettle() async {
         let unpaired = LeftoverLiveActivity(id: "unpaired", attributes: AgentRunActivityAttributes(
-            sessionID: "hermes:default:tip", sessionTitle: "Run", startedAt: .now, server: server, pushSessionID: "tip"),
-            isFinished: false)
+            sessionID: "hermes:default:tip", sessionTitle: "Run", startedAt: .now, server: server, pushSessionID: "tip",
+            requestedPush: true), isFinished: false)
         var reads = 0
         let failed = await LeftoverLiveActivitySettlement.actions(
             for: [unpaired], isPaired: { _ in false }, hermesServer: server, runningKeys: { reads += 1; return nil })
@@ -1715,6 +1715,26 @@ final class LiveActivityTests: XCTestCase {
         let unknown = await LeftoverLiveActivitySettlement.actions(
             for: [keyless], isPaired: { _ in false }, hermesServer: server, runningKeys: { ["tip"] })
         XCTAssertEqual(unknown, [.keep])
+    }
+
+    /// A Hermes session's activity started before its server paired asked for no push token, so
+    /// the relay can't drive it after pairing: it is checked against the live list like an
+    /// unpaired one, never adopted (#1179).
+    func testColdLaunchChecksAHermesRunStartedBeforePairingAgainstTheLiveList() async {
+        func hermes(_ key: String, requestedPush: Bool?) -> LeftoverLiveActivity {
+            LeftoverLiveActivity(id: key, attributes: AgentRunActivityAttributes(
+                sessionID: "hermes:default:\(key)", sessionTitle: "Run", startedAt: .now, server: server,
+                pushSessionID: key, requestedPush: requestedPush), isFinished: false)
+        }
+        var reads = 0
+        let actions = await LeftoverLiveActivitySettlement.actions(
+            for: [hermes("pushed", requestedPush: true), hermes("local-running", requestedPush: nil),
+                  hermes("local-done", requestedPush: nil)],
+            isPaired: { _ in true }, hermesServer: server,
+            runningKeys: { reads += 1; return ["pushed", "local-running"] }
+        )
+        XCTAssertEqual(actions, [.adopt, .keep, .endComplete])
+        XCTAssertEqual(reads, 1)
     }
 
     /// A legacy compression's key move outlives the process (#1179). A fresh manager, as after a
