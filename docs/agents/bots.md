@@ -1701,11 +1701,15 @@ extension and its app-group inbox are unchanged: `ContentView` reserves the next
 it to `HermesServerHome`, which turns to Sessions; without a saved connection it releases the
 share, which stays queued. Once the list has settled New Session's Profile and read the host live
 (`SharedImportReservation.hermesOpening`, as a Shortcut's new chat), it moves the share into that Profile's new-session
-draft (`moveIntoDraft`, `ChatDraftStore.appendShare`): the text goes after any unsent text and the
-files, prepared as a Hermes send takes them under Bot Chat's limits, after any staged ones, all
-written to disk before `ContentView` consumes the reservation. A failed move releases the share
-and one cut short by leaving the list keeps it reserved, so a staged share is never lost. The
-list then pushes `.new(profile:)`, whose composer restores that draft, and the first Send creates
+draft (`transfer`, `moveIntoDraft`, `ChatDraftStore.appendShare`): the text goes after any unsent
+text and the files, prepared as a Hermes send takes them under Bot Chat's limits, after any staged
+ones, all written to disk before `ContentView` consumes the reservation. A file that can't go now
+(its type, an unreadable image, a full draft) fails the whole move, which releases the share; one
+cut short by leaving the list keeps it reserved, so a staged share is never lost. The draft records
+the share's item id with its content (`ChatDraft.sharedImportIDs`), so a retry, or a replay after
+the app quit before consuming, adds nothing and is consumed. A composer already open on that draft
+keeps records it never saw (`setAttachments(_:replacing:for:)`), and a move whose records are gone
+by the time its write lands takes back only what it added and stays queued. The list then pushes `.new(profile:)`, whose composer restores that draft, and the first Send creates
 the session and uploads each file once (#1012). Leaving without sending keeps it for the next New
 Session, and a Profile picked before sending carries the draft into the new Profile's chat
 (#1015), unless a draft already waits there. A webui list opens one share and offers later ones in

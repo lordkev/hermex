@@ -3023,7 +3023,8 @@ struct ChatView: View {
     /// Restored records whose re-upload failed are unioned back in so a
     /// mid-restore or post-restore sync can't silently drop them. Gated during
     /// hydration/restore so an empty or partial composer never overwrites the
-    /// persisted set.
+    /// persisted set. Records this composer never saw (a share moved in, #1181)
+    /// stay in the draft.
     private func syncDraftAttachments() {
         guard didHydrateDraft, !isRestoringDraftAttachments else { return }
         // Only records backed by a durable copy are persisted. Without one the
@@ -3036,8 +3037,8 @@ struct ChatView: View {
             !pendingRecords.contains(where: { $0.id == retry.id })
         }
         let records = pendingRecords + retryRecords
+        draftStore.setAttachments(records, replacing: lastSyncedDraftAttachments, for: draftKey)
         lastSyncedDraftAttachments = records
-        draftStore.setAttachments(records, for: draftKey)
     }
 
     /// Snapshots the effective composer settings into the draft whenever they
@@ -3111,6 +3112,8 @@ struct ChatView: View {
         // Not the user's edit, but a send still in flight must not clear it.
         draftRevision &+= 1
         draftMessage = parked.text
+        // The composer now knows the parked files, so removing one sticks.
+        lastSyncedDraftAttachments = parked.attachments
         viewModel.appendPendingAttachments(queued.flatMap(\.attachments))
     }
 

@@ -423,7 +423,7 @@ final class SharedDraftStoreTests: XCTestCase {
     }
 
     private func reservation(_ draft: String, _ attachments: [SharedAttachmentImport] = []) -> SharedImportReservation {
-        SharedImportReservation(itemID: "item", reservationID: UUID().uuidString, createdAt: Date(timeIntervalSince1970: 0),
+        SharedImportReservation(itemID: UUID().uuidString, reservationID: UUID().uuidString, createdAt: Date(timeIntervalSince1970: 0),
                                 sharedImport: SharedImport(draft: draft, attachments: attachments))
     }
 
@@ -478,11 +478,9 @@ final class SharedDraftStoreTests: XCTestCase {
         let copies = BotAttachmentCopies()
         let (chat, key) = newSession()
         let pdf = SharedAttachmentImport(filename: "notes.pdf", typeIdentifier: "com.adobe.pdf", data: Data([4, 5]))
-        let broken = SharedAttachmentImport(filename: "photo.heic", typeIdentifier: "public.heic", data: Data([1, 2, 3]))
 
-        let failure = try await reservation("  Read this  ", [pdf, broken]).moveIntoDraft(of: chat, drafts: drafts(disk, copies))
+        try await reservation("  Read this  ", [pdf]).moveIntoDraft(of: chat, drafts: drafts(disk, copies))
 
-        XCTAssertEqual(failure, .unreadable, "A file Hermes can't take is left out, and the list says why")
         // The next New Session in this Profile, even after a relaunch, restores the share from disk.
         let restored = await drafts(disk, copies).draft(for: key)
         XCTAssertEqual(restored?.text, "Read this\n")
@@ -509,7 +507,7 @@ final class SharedDraftStoreTests: XCTestCase {
         await copies.resume()
 
         do {
-            _ = try await move.value
+            try await move.value
             XCTFail("A move cut short throws, so the share is not consumed")
         } catch {
             XCTAssertTrue(error is CancellationError, "\(error)")
@@ -530,13 +528,186 @@ final class SharedDraftStoreTests: XCTestCase {
         let a = SharedAttachmentImport(filename: "a.pdf", typeIdentifier: "com.adobe.pdf", data: Data([1]))
         let b = SharedAttachmentImport(filename: "b.txt", typeIdentifier: "public.plain-text", data: Data([2]))
 
-        _ = try await reservation("Share A", [a]).moveIntoDraft(of: chat, drafts: drafts(disk, copies))
+        try await reservation("Share A", [a]).moveIntoDraft(of: chat, drafts: drafts(disk, copies))
         // The user backs out without sending, then shares again into the same Profile.
-        _ = try await reservation("Share B", [b]).moveIntoDraft(of: newSession().chat, drafts: drafts(disk, copies))
+        try await reservation("Share B", [b]).moveIntoDraft(of: newSession().chat, drafts: drafts(disk, copies))
 
         let draft = await drafts(disk, copies).draft(for: key)
         XCTAssertEqual(draft?.text, "Share A\n\nShare B\n")
         XCTAssertEqual(draft?.attachments.map(\.name), ["a.pdf", "b.txt"])
+    }
+
+    /// A share waiting in a fresh app-group inbox, reserved as `ContentView` reserves it.
+    private func inboxShare(_ draft: String, _ attachments: [SharedAttachmentImport]) throws
+        -> (inbox: URL, share: SharedImportReservation) {
+        let inbox = try temporaryDirectory()
+        try HermesShareDraft.savePendingImport(draft: draft, attachments: attachments, in: inbox)
+        return (inbox, try XCTUnwrap(try HermesShareDraft.reserveNextPendingImport(from: inbox)))
+    }
+
+    @MainActor
+    func testAFileTheDraftCantTakeKeepsTheWholeShareQueued() async throws {
+        let bytes = Data("pdf bytes".utf8)
+        let (inbox, share) = try inboxShare("One more", [
+            SharedAttachmentImport(filename: "ninth.pdf", typeIdentifier: "com.adobe.pdf", data: bytes)
+        ])
+        let copies = BotAttachmentCopies()
+        let store = drafts(BotMemoryDrafts(), copies)
+        let (chat, key) = newSession()
+        let full = (1...8).map {
+            ChatDraftAttachment(id: UUID(), name: "\($0).pdf", mime: "application/pdf", size: 1, isImage: false, file: "staged-\($0)")
+        }
+        store.setDraft("Unsent", for: key)
+        store.setAttachments(full, for: key)
+        var routed = 0
+
+        do {
+            try await share.transfer(into: chat, drafts: store, route: { _ in routed += 1 },
+                                     decline: { try? HermesShareDraft.release($0, in: inbox) })
+            XCTFail("A share the draft can't take whole is not moved")
+        } catch {
+            XCTAssertEqual(error as? BotAttachmentFailure, .limit)
+        }
+
+        XCTAssertEqual(routed, 0, "It is never let go")
+        let draft = await store.draft(for: key)
+        XCTAssertEqual(draft?.text, "Unsent")
+        XCTAssertEqual(draft?.attachments, full)
+        let kept = await copies.count
+        XCTAssertEqual(kept, 0)
+        // Released, it comes back whole on the next try, once the user has made room.
+        let again = try XCTUnwrap(try HermesShareDraft.reserveNextPendingImport(from: inbox))
+        XCTAssertEqual(again.itemID, share.itemID)
+        XCTAssertEqual(again.sharedImport.attachments.map(\.data), [bytes])
+    }
+
+    @MainActor
+    func testAShareRetriedWhileItsWriteIsInFlightIsAddedAndConsumedOnce() async throws {
+        let (inbox, share) = try inboxShare("Read this", [
+            SharedAttachmentImport(filename: "notes.pdf", typeIdentifier: "com.adobe.pdf", data: Data([4, 5])),
+            SharedAttachmentImport(filename: "notes.txt", typeIdentifier: "public.plain-text", data: Data([6]))
+        ])
+        let disk = PausingDrafts()
+        let copies = BotAttachmentCopies()
+        let store = ChatDraftStore(persistence: disk, attachmentStore: copies, debounceDuration: .seconds(3600))
+        let (chat, key) = newSession()
+        let consumed = Tally()
+        let consume: (SharedImportReservation) -> Void = {
+            if (try? HermesShareDraft.consume($0, from: inbox)) != nil { consumed.count += 1 }
+        }
+        let decline: (SharedImportReservation) -> Void = { _ in XCTFail("Nothing failed") }
+
+        await disk.pauseNextWrite()
+        let first = Task { try await share.transfer(into: chat, drafts: store, route: consume, decline: decline) }
+        await disk.waitUntilPaused()
+        // The list leaves while the draft is being written, and on its return tries the same share again.
+        first.cancel()
+        let retry = Task { try await share.transfer(into: self.newSession().chat, drafts: store, route: consume, decline: decline) }
+        await disk.resume()
+        try await first.value
+        try await retry.value
+
+        XCTAssertEqual(consumed.count, 1, "The first move is let go though its list left; the retry finds it done")
+        let draft = await store.draft(for: key)
+        XCTAssertEqual(draft?.text, "Read this\n")
+        XCTAssertEqual(draft?.attachments.map(\.name), ["notes.pdf", "notes.txt"])
+        let saved = await copies.count
+        XCTAssertEqual(saved, 2)
+        XCTAssertNil(try HermesShareDraft.reserveNextPendingImport(from: inbox))
+    }
+
+    @MainActor
+    func testAShareReplayedAfterTheAppQuitBeforeConsumingIsAddedOnce() async throws {
+        let (inbox, share) = try inboxShare("Read this", [
+            SharedAttachmentImport(filename: "notes.pdf", typeIdentifier: "com.adobe.pdf", data: Data([4, 5]))
+        ])
+        let directory = try temporaryDirectory()
+        let copies = BotAttachmentCopies()
+        func launch() -> ChatDraftStore {
+            ChatDraftStore(persistence: ChatDraftFilePersistence(directoryURL: directory), attachmentStore: copies,
+                           debounceDuration: .seconds(3600))
+        }
+        let (chat, key) = newSession()
+        let decline: (SharedImportReservation) -> Void = { _ in XCTFail("Nothing failed") }
+
+        // The draft is written, then the app quits before the share is consumed.
+        try await share.transfer(into: chat, drafts: launch(), route: { _ in }, decline: decline)
+        // On relaunch its reservation expires back into the inbox and it is offered again.
+        let replay = try XCTUnwrap(try HermesShareDraft.reserveNextPendingImport(
+            from: inbox, now: Date().addingTimeInterval(HermesShareDraft.reservationLifetime + 60)))
+        XCTAssertEqual(replay.itemID, share.itemID)
+        let relaunched = launch()
+        var consumed = 0
+        try await replay.transfer(into: newSession().chat, drafts: relaunched, route: {
+            if (try? HermesShareDraft.consume($0, from: inbox)) != nil { consumed += 1 }
+        }, decline: decline)
+
+        XCTAssertEqual(consumed, 1)
+        let draft = await relaunched.draft(for: key)
+        XCTAssertEqual(draft?.text, "Read this\n")
+        XCTAssertEqual(draft?.attachments.map(\.name), ["notes.pdf"])
+        let saved = await copies.count
+        XCTAssertEqual(saved, 1)
+        XCTAssertNil(try HermesShareDraft.reserveNextPendingImport(from: inbox))
+    }
+
+    @MainActor
+    func testAComposerSnapshotDuringAShareKeepsTheSharedFile() async throws {
+        let disk = PausingDrafts()
+        let store = ChatDraftStore(persistence: disk, attachmentStore: BotAttachmentCopies(), debounceDuration: .seconds(3600))
+        let (_, key) = newSession()
+        let picked = ChatDraftAttachment(id: UUID(), name: "picked.png", mime: "image/png", size: 1, isImage: true, file: "picked")
+
+        await disk.pauseNextWrite()
+        let move = Task {
+            try await store.appendShare("item", text: "Read this\n", files: [(Data([4, 5]), "notes.pdf", "application/pdf", false)],
+                                        to: key, maximumFileBytes: 1024)
+        }
+        await disk.waitUntilPaused()
+        // A composer open on this draft since before the share finishes staging a picked file.
+        store.setAttachments([picked], replacing: [], for: key)
+        await disk.resume()
+        try await move.value
+
+        let draft = await store.draft(for: key)
+        XCTAssertEqual(draft?.attachments.map(\.name), ["picked.png", "notes.pdf"])
+        try await store.flush()
+        let onDisk = await disk.values[key]
+        XCTAssertEqual(onDisk?.attachments.map(\.name), ["picked.png", "notes.pdf"])
+    }
+
+    @MainActor
+    func testAShareWhoseFileIsDroppedDuringItsWriteIsTakenBackAndNotLetGo() async throws {
+        let disk = PausingDrafts()
+        let copies = BotAttachmentCopies()
+        let store = ChatDraftStore(persistence: disk, attachmentStore: copies, debounceDuration: .seconds(3600))
+        let (_, key) = newSession()
+        let own = ChatDraftAttachment(id: UUID(), name: "own.png", mime: "image/png", size: 1, isImage: true, file: "own")
+        store.setDraft("Unsent", for: key)
+        store.setAttachments([own], for: key)
+
+        await disk.pauseNextWrite()
+        let move = Task {
+            try await store.appendShare("item", text: "Read this\n", files: [(Data([4, 5]), "notes.pdf", "application/pdf", false)],
+                                        to: key, maximumFileBytes: 1024)
+        }
+        await disk.waitUntilPaused()
+        // A write that replaces every record, such as a send clearing what it carried, lands meanwhile.
+        store.setAttachments([], for: key)
+        await disk.resume()
+
+        do {
+            try await move.value
+            XCTFail("A share that lost a file is not let go")
+        } catch {
+            XCTAssertEqual(error as? ChatDraftStorageError, .unavailable)
+        }
+        let draft = await store.draft(for: key)
+        XCTAssertEqual(draft?.text, "Unsent", "The share's text is taken back")
+        XCTAssertEqual(draft?.attachments, [], "The write made meanwhile stays")
+        XCTAssertEqual(draft?.sharedImportIDs, [], "So the share moves again on its next try")
+        let kept = await copies.count
+        XCTAssertEqual(kept, 0)
     }
 
     func testAHermesServerOpensEachShareAsItArrives() {
@@ -603,4 +774,38 @@ private actor PausingCopies: ChatDraftAttachmentStoring {
     func fileURL(named fileName: String) async throws -> URL { try await copies.fileURL(named: fileName) }
     func delete(named fileName: String) async { await copies.delete(named: fileName) }
     func sweep(keepingReferenced fileNames: Set<String>, olderThan maxAge: TimeInterval) async {}
+}
+
+@MainActor private final class Tally {
+    var count = 0
+}
+
+/// Draft persistence whose next write, once armed, waits for `resume`, so a test can act while
+/// a share's write is in flight.
+private actor PausingDrafts: ChatDraftPersisting {
+    private(set) var values: [ChatDraftKey: ChatDraft] = [:]
+    private var pausesNextWrite = false
+    private var paused: CheckedContinuation<Void, Never>?
+    private var pauseWaiter: CheckedContinuation<Void, Never>?
+
+    func pauseNextWrite() { pausesNextWrite = true }
+    func waitUntilPaused() async {
+        guard paused == nil else { return }
+        await withCheckedContinuation { pauseWaiter = $0 }
+    }
+    func resume() {
+        paused?.resume()
+        paused = nil
+    }
+
+    func load() -> [ChatDraftKey: ChatDraft] { values }
+    func write(_ drafts: [ChatDraftKey: ChatDraft]) async {
+        if pausesNextWrite {
+            pausesNextWrite = false
+            pauseWaiter?.resume()
+            pauseWaiter = nil
+            await withCheckedContinuation { paused = $0 }
+        }
+        values = drafts
+    }
 }

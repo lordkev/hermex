@@ -554,10 +554,9 @@ struct HermesSessionListView: View {
         if covers.open(pendingNewChat, on: entry, listed: profile, isLive: viewModel.isHermesLive) { pendingNewChat = nil }
     }
 
-    /// Opens a share (#1181) as a new session over whatever covers the rows. Its text and files
-    /// move into that session's draft first, and only then does `ContentView` consume it; a
-    /// transfer that fails releases it to stay queued, and one cut short by leaving keeps it here
-    /// for the next try.
+    /// Opens a share (#1181) as a new session over whatever covers the rows, once `transfer` has
+    /// moved it into that session's draft and let it go. A transfer that fails keeps it queued and
+    /// says why; one cut short by leaving keeps it here for the next try.
     private func openPendingShare() {
         guard shareTransfer == nil, let share = pendingShare,
               let opening = share.hermesOpening(on: entry, listed: profile, isLive: viewModel.isHermesLive) else {
@@ -566,16 +565,17 @@ struct HermesSessionListView: View {
         guard case .chat(let chat) = opening else { return didRouteShare(share) }
         shareTransfer = Task {
             do {
-                let failure = try await share.moveIntoDraft(of: chat)
-                didRouteShare(share)
-                guard !Task.isCancelled else { return }
-                covers.bringForward()
-                covers.chat = chat
-                if let failure { showLinkNotice(failure.localizedDescription) }
+                try await share.transfer(into: chat, route: didRouteShare, decline: didDeclineShare)
+                if !Task.isCancelled {
+                    covers.bringForward()
+                    covers.chat = chat
+                }
             } catch is CancellationError {
             } catch {
-                didDeclineShare(share)
-                showLinkNotice(String(localized: "Could not save the attachment on this device."))
+                if !Task.isCancelled {
+                    showLinkNotice((error as? BotAttachmentFailure)?.localizedDescription
+                                   ?? String(localized: "Could not save the attachment on this device."))
+                }
             }
             if !Task.isCancelled { shareTransfer = nil }
         }
@@ -665,37 +665,55 @@ extension SharedImportReservation {
         return isEmpty ? .nothing : .chat(chat)
     }
 
+    /// Moves the share into `chat`'s draft, then lets it go with `route` (`ContentView` consumes
+    /// it), even when the caller was cancelled after the draft took it: the draft owns it from then
+    /// on. A failure keeps it queued with `decline` and rethrows; a cancellation before the draft
+    /// took it rethrows and keeps it reserved for the next try.
+    @MainActor func transfer(into chat: HermesSessionChat, drafts: ChatDraftStore = .shared,
+                             route: (Self) -> Void, decline: (Self) -> Void) async throws {
+        do {
+            try await moveIntoDraft(of: chat, drafts: drafts)
+        } catch {
+            if !(error is CancellationError) { decline(self) }
+            throw error
+        }
+        route(self)
+    }
+
     /// Moves the share into `chat`'s new-session draft, which the chat opens on: its text after
     /// any unsent text, its files after any staged ones, each as a Hermes send takes it
-    /// (`BotAttachmentUpload.prepare`, Bot Chat's limits). Files Hermes can't take are left out
-    /// and the first reason is returned to show. Once it returns the draft owns the share, so
-    /// `ContentView` can consume it; a throw leaves the draft as it was and the share queued.
-    @MainActor func moveIntoDraft(of chat: HermesSessionChat, drafts: ChatDraftStore = .shared) async throws -> BotAttachmentFailure? {
+    /// (`BotAttachmentUpload.prepare`, Bot Chat's limits). A file Hermes can't take now (its type,
+    /// an unreadable image, no room left in the draft) throws its reason and moves nothing, so the
+    /// whole share stays recoverable. Once it returns the draft owns the share, under its item id,
+    /// so a retry or replay adds nothing; a throw leaves the draft as it was.
+    @MainActor func moveIntoDraft(of chat: HermesSessionChat, drafts: ChatDraftStore = .shared) async throws {
         let key = chat.target.draftKey(server: chat.server, connectionID: chat.connection.id, lineageRoot: chat.lineageRoot)
-        let staged = await drafts.draft(for: key)?.attachments ?? []
-        var room = HermexAttachmentPickerPolicy.maximumBotAttachments - staged.count
-        var bytes = staged.reduce(0) { $0 + ($1.size ?? BotAttachmentUpload.maximumFileBytes) }
+        let draft = await drafts.draft(for: key)
         var files: [(data: Data, name: String, mime: String, image: Bool)] = []
-        var failure: BotAttachmentFailure?
-        for attachment in sharedImport.attachments {
-            do {
-                let prepared = try await Task.detached {
-                    try BotAttachmentUpload.prepare(data: attachment.data, filename: attachment.filename)
-                }.value
+        if draft?.sharedImportIDs.contains(itemID) != true {
+            let staged = draft?.attachments ?? []
+            var room = HermexAttachmentPickerPolicy.maximumBotAttachments - staged.count
+            var bytes = staged.reduce(0) { $0 + ($1.size ?? BotAttachmentUpload.maximumFileBytes) }
+            for attachment in sharedImport.attachments {
+                let prepared: (data: Data, name: String, mime: String, image: Bool)
+                do {
+                    prepared = try await Task.detached {
+                        try BotAttachmentUpload.prepare(data: attachment.data, filename: attachment.filename)
+                    }.value
+                } catch {
+                    throw error as? BotAttachmentFailure ?? .unreadable
+                }
                 guard room > 0, bytes + prepared.data.count <= BotAttachmentUpload.maximumTotalBytes else {
                     throw BotAttachmentFailure.limit
                 }
                 room -= 1
                 bytes += prepared.data.count
                 files.append(prepared)
-            } catch {
-                failure = failure ?? (error as? BotAttachmentFailure ?? .unreadable)
             }
+            try Task.checkCancellation()
         }
-        try Task.checkCancellation()
-        try await drafts.appendShare(text: HermesShareDraft.composerDraft(from: sharedImport.draft), files: files,
+        try await drafts.appendShare(itemID, text: HermesShareDraft.composerDraft(from: sharedImport.draft), files: files,
                                      to: key, maximumFileBytes: BotAttachmentUpload.maximumFileBytes)
-        return failure
     }
 }
 

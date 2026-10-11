@@ -78,6 +78,10 @@ struct ChatDraft: Equatable, Sendable {
     // loss must survive relaunch (#508).
     var botSubmissionUncertain = false
     var lastUsedAt: Date?
+    /// The shares (app-group item ids) already moved into this draft, so a retried or
+    /// replayed share isn't added twice (#1181). Rides along with the content; never
+    /// keeps a draft alive on its own.
+    var sharedImportIDs: Set<String> = []
 
     var isEmpty: Bool {
         text.isEmpty && quotes.isEmpty && attachments.isEmpty && (settings?.isEmpty ?? true) && !botSubmissionUncertain
@@ -397,6 +401,7 @@ actor ChatDraftFilePersistence: ChatDraftPersisting {
         var connectionID: UUID?
         var profile: String?
         var botSubmissionUncertain: Bool?
+        var sharedImportIDs: [String]?
 
         let lastUsedAt: Date?
 
@@ -407,7 +412,7 @@ actor ChatDraftFilePersistence: ChatDraftPersisting {
             case text
             case quotes
             case attachments
-            case settings, connectionID, profile, botSubmissionUncertain, lastUsedAt
+            case settings, connectionID, profile, botSubmissionUncertain, lastUsedAt, sharedImportIDs
         }
 
         init(key: ChatDraftKey, draft: ChatDraft) {
@@ -436,6 +441,7 @@ actor ChatDraftFilePersistence: ChatDraftPersisting {
             quotes = draft.quotes.map { FailableQuote(value: QuoteRecord($0)) }
             attachments = draft.attachments.map { FailableAttachment(value: AttachmentRecord($0)) }
             settings = draft.settings.map { SettingsRecord($0) }
+            sharedImportIDs = draft.sharedImportIDs.isEmpty ? nil : draft.sharedImportIDs.sorted()
         }
 
         init(from decoder: Decoder) throws {
@@ -455,6 +461,7 @@ actor ChatDraftFilePersistence: ChatDraftPersisting {
             quotes = (try? container.decodeIfPresent([FailableQuote].self, forKey: .quotes)) ?? nil
             attachments = (try? container.decodeIfPresent([FailableAttachment].self, forKey: .attachments)) ?? nil
             settings = (try? container.decodeIfPresent(SettingsRecord.self, forKey: .settings)) ?? nil
+            sharedImportIDs = (try? container.decodeIfPresent([String].self, forKey: .sharedImportIDs)) ?? nil
         }
 
         var draft: (key: ChatDraftKey, draft: ChatDraft)? {
@@ -496,7 +503,8 @@ actor ChatDraftFilePersistence: ChatDraftPersisting {
                 attachments: (attachments ?? []).compactMap(\.value?.attachment),
                 settings: settings?.settings,
                 botSubmissionUncertain: ["bot", "hermesSession"].contains(context) && (botSubmissionUncertain ?? false),
-                lastUsedAt: lastUsedAt
+                lastUsedAt: lastUsedAt,
+                sharedImportIDs: Set(sharedImportIDs ?? [])
             )
             guard !draft.isEmpty else { return nil }
             return (key, draft)
@@ -679,10 +687,21 @@ final class ChatDraftStore {
     }
 
     /// Replaces the draft's staged-attachment records without disturbing its
-    /// text or settings.
-    func setAttachments(_ attachments: [ChatDraftAttachment], for key: ChatDraftKey) {
+    /// text or settings. A composer passes the records it last synced as
+    /// `previous`: records it never saw, such as a share moved in meanwhile
+    /// (#1181), stay after its own. Nil replaces every record.
+    func setAttachments(
+        _ attachments: [ChatDraftAttachment], replacing previous: [ChatDraftAttachment]? = nil, for key: ChatDraftKey
+    ) {
         markChangedBeforeLoad(key)
-        updateDraft(for: key) { $0.attachments = attachments }
+        updateDraft(for: key) { draft in
+            var unseen: [ChatDraftAttachment] = []
+            if let previous {
+                let seen = Set((previous + attachments).map(\.id))
+                unseen = draft.attachments.filter { !seen.contains($0.id) }
+            }
+            draft.attachments = attachments + unseen
+        }
     }
 
     /// Parks the messages queued behind a run in the chat's draft, in one
@@ -706,15 +725,21 @@ final class ChatDraftStore {
         return drafts[key]
     }
 
-    /// Adds a share to `key`'s draft (#1181): `text` after any unsent text and
-    /// `files` after any staged ones, so an earlier share waiting there is kept.
-    /// Each file gets its durable copy first; the records and text then land in
-    /// one change that is on disk before this returns, so the caller can let go
-    /// of the share. A throw (cancellation, storage) leaves the draft as it was.
+    /// Adds share `shareID` to `key`'s draft (#1181): `text` after any unsent
+    /// text and `files` after any staged ones, so an earlier share waiting there
+    /// is kept. Each file gets its durable copy first; the records, text and
+    /// `shareID` then land in one change that is on disk, and still in the
+    /// draft, before this returns, so the caller can let go of the share. A
+    /// share already there (a retry, or a replay after the app quit before
+    /// letting go) adds nothing and returns once it is on disk. A throw
+    /// (cancellation, storage, a record dropped meanwhile) takes back only what
+    /// this share added, so the share can be moved again.
     func appendShare(
-        text: String, files: [(data: Data, name: String, mime: String, image: Bool)],
+        _ shareID: String, text: String, files: [(data: Data, name: String, mime: String, image: Bool)],
         to key: ChatDraftKey, maximumFileBytes: Int
     ) async throws {
+        await loadIfNeeded()
+        func isHere() -> Bool { drafts[key]?.sharedImportIDs.contains(shareID) == true }
         let lease = makeAttachmentLease(key: key)
         var records: [ChatDraftAttachment] = []
         func deleteCopies() async {
@@ -724,7 +749,7 @@ final class ChatDraftStore {
             }
         }
         do {
-            for file in files {
+            for file in files where !isHere() {
                 let id = UUID()
                 let copy = try await stageAttachment(
                     data: file.data, filename: file.name, lease: lease, attachmentID: id, maximumFileBytes: maximumFileBytes
@@ -732,21 +757,38 @@ final class ChatDraftStore {
                 records.append(ChatDraftAttachment(id: id, name: file.name, mime: file.mime, size: file.data.count,
                                                    isImage: file.image, file: copy))
             }
-            try Task.checkCancellation()
+            if !isHere() { try Task.checkCancellation() }
         } catch {
             await deleteCopies()
             throw error
         }
-        let before = drafts[key]
-        updateDraft(for: key) { draft in
-            let unsent = draft.text.trimmingCharacters(in: .newlines)
-            if !text.isEmpty { draft.text = unsent.isEmpty ? text : unsent + "\n\n" + text }
-            draft.attachments += records
+        guard !isHere() else {
+            await deleteCopies()
+            try await flush()
+            guard isHere() else { throw ChatDraftStorageError.unavailable }
+            return
         }
+        let unsent = drafts[key]?.text ?? ""
+        updateDraft(for: key) { draft in
+            let trimmed = draft.text.trimmingCharacters(in: .newlines)
+            if !text.isEmpty { draft.text = trimmed.isEmpty ? text : trimmed + "\n\n" + text }
+            draft.attachments += records
+            draft.sharedImportIDs.insert(shareID)
+        }
+        let merged = drafts[key]?.text
+        let ids = Set(records.map(\.id))
         do {
             try await flush()
+            // A composer's send or snapshot during the write may have dropped a record.
+            guard isHere(), ids.isSubset(of: Set(drafts[key]?.attachments.map(\.id) ?? [])) else {
+                throw ChatDraftStorageError.unavailable
+            }
         } catch {
-            updateDraft(for: key) { $0 = before ?? ChatDraft() }
+            updateDraft(for: key) { draft in
+                draft.sharedImportIDs.remove(shareID)
+                draft.attachments.removeAll { ids.contains($0.id) }
+                if draft.text == merged { draft.text = unsent }
+            }
             await deleteCopies()
             throw error
         }
