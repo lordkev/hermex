@@ -472,6 +472,30 @@ import Observation
         XCTAssertEqual(chat()?.target, .new(profile: "research"))
     }
 
+    /// A Shortcut's new chat arriving while a cached chat covers the paused list (#1180) closes it
+    /// at once, so the list shows and reads the host again (its appearing reopens it), and the new
+    /// chat opens after that read rather than waiting for the user to go back to Sessions.
+    func testAHeldNewChatOverACachedChatOpensAfterTheListReadsAgain() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: page([HermesSessionRow(id: "a")])]
+        wire.connectFailure = BotFailure.transport
+        let list = makeList(wire)
+        await list.openHermes()
+        let entry = HermesSessionListEntry(server: server, connection: connection, profile: "default")
+        var covers = HermesSessionListCovers()
+        covers.chat = HermesSessionChat(server: server, connection: connection, target: .session(profile: "default", key: "a"))
+        list.pauseHermes()
+        let request = HermesNewChatDestination(server: server, profile: "research")
+
+        XCTAssertFalse(covers.open(request, on: entry, listed: list.hermesProfile, isLive: list.isHermesLive))
+        XCTAssertNil(covers.chat, "The cached chat closes before the list is live")
+
+        wire.connectFailure = nil
+        await list.openHermes()
+        XCTAssertTrue(covers.open(request, on: entry, listed: list.hermesProfile, isLive: list.isHermesLive))
+        XCTAssertEqual(covers.chat?.target, .new(profile: "research"))
+    }
+
     // MARK: Fixture
 
     private func makeList(_ wire: HermesSessionListWire, profile: String? = "default",

@@ -246,7 +246,8 @@ struct HermesSessionListView: View {
         // what it opens or says shows here.
         .onChange(of: pendingLink, initial: true) { covers.accept(pendingLink, on: entry.server) }
         .task(id: pendingLink) { await openPendingLink() }
-        // Opens once the list has read the host live, whichever Profile the request names.
+        // Brings the rows forward at once, then opens once the list has read the host live,
+        // whichever Profile the request names.
         .onChange(of: NewChatReadiness(request: pendingNewChat, profile: profile, isLive: viewModel.isHermesLive),
                   initial: true) { openPendingNewChat() }
         .onDisappear {
@@ -533,12 +534,7 @@ struct HermesSessionListView: View {
 
     /// Opens the new session a Shortcut asked for (#1180) over whatever covers the rows.
     private func openPendingNewChat() {
-        guard let chat = pendingNewChat?.chat(on: entry, listed: profile, isLive: viewModel.isHermesLive) else {
-            return
-        }
-        pendingNewChat = nil
-        covers.bringForward()
-        covers.chat = chat
+        if covers.open(pendingNewChat, on: entry, listed: profile, isLive: viewModel.isHermesLive) { pendingNewChat = nil }
     }
 
     private func showLinkNotice(_ message: String) {
@@ -693,6 +689,19 @@ struct HermesSessionListCovers {
     mutating func accept(_ link: HermesSessionDestination?, on server: URL) {
         guard link?.server == server else { return }
         bringForward()
+    }
+
+    /// Opens a Shortcut's new session for `entry`'s server (#1180) over everything on the rows,
+    /// once `HermesNewChatDestination.chat(on:listed:isLive:)` can. The rows come forward first,
+    /// so a chat that paused the list closes and the list, appearing again, reads the host the
+    /// request waits on. True once it opened.
+    @MainActor mutating func open(_ request: HermesNewChatDestination?, on entry: HermesSessionListEntry, listed: String?,
+                                  isLive: Bool) -> Bool {
+        guard let request, request.server == entry.server else { return false }
+        bringForward()
+        guard let chat = request.chat(on: entry, listed: listed, isLive: isLive) else { return false }
+        self.chat = chat
+        return true
     }
 
     /// Closes everything over the rows, so what opens next shows on the list itself.
