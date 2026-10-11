@@ -83,7 +83,22 @@ final class AppIntentNewChatInProfileTests: XCTestCase {
     func testASavedBareProfileLinkKeepsItsWebuiRoute() throws {
         let url = try XCTUnwrap(HermesDeepLink.newChatInProfileURL(profileName: "dev"))
         XCTAssertNil(HermesNewChatDestination(url: url))
+        XCTAssertTrue(HermesDeepLink.isWebuiNewChatInProfileURL(url))
         XCTAssertEqual(HermesDeepLink.profileName(fromNewChatInProfile: url), "dev")
+        let bare = try XCTUnwrap(URL(string: "\(HermesDeepLink.scheme)://new-chat-profile"))
+        XCTAssertTrue(HermesDeepLink.isWebuiNewChatInProfileURL(bare), "A link with no profile stays a plain webui new chat")
+    }
+
+    /// A link naming a server never falls back to the webui route, which would open another
+    /// server's composer.
+    func testALinkNamingAServerThatCannotOpenIsNotAWebuiLink() throws {
+        for query in ["server=https%3A%2F%2Fstudio.test&profile=", "server=https%3A%2F%2Fstudio.test&profile=%20",
+                      "server=https%3A%2F%2Fstudio.test", "server=not%20a%20url&profile=dev",
+                      "server=ftp://studio.test&profile=dev", "server=&profile=dev", "server&profile=dev"] {
+            let url = try XCTUnwrap(URL(string: "\(HermesDeepLink.scheme)://new-chat-profile?\(query)"))
+            XCTAssertNil(HermesNewChatDestination(url: url), query)
+            XCTAssertFalse(HermesDeepLink.isWebuiNewChatInProfileURL(url), query)
+        }
     }
 
     @MainActor
@@ -164,6 +179,23 @@ final class AppIntentNewChatInProfileTests: XCTestCase {
 
         XCTAssertEqual(names.names(for: studio), [])
         XCTAssertEqual(names.names(for: air), [.init(profile: "default", title: "Air")])
+    }
+
+    /// Server URLs are credential-like and stay out of the app group (#1180).
+    func testTheNameCacheStoresNoServerURL() throws {
+        let (names, suite, defaults) = makeIsolatedNames()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let studio = try XCTUnwrap(URL(string: "https://studio.test"))
+        names.save([.init(profile: "default", title: "Hermes")], for: studio)
+
+        let stored = try XCTUnwrap(defaults.persistentDomain(forName: suite))
+        XCTAssertEqual(stored.count, 1)
+        for (key, value) in stored {
+            XCTAssertFalse(key.contains("studio.test"), key)
+            let payload = String(decoding: try XCTUnwrap(value as? Data), as: UTF8.self)
+            XCTAssertFalse(payload.contains("studio.test"), payload)
+        }
+        XCTAssertEqual(names.names(for: studio), [.init(profile: "default", title: "Hermes")])
     }
 
     /// `/api/status` through `ProfileStatusFixture`, as the picker reads it.

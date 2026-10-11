@@ -90,6 +90,14 @@ enum HermesDeepLink {
             && url.host?.lowercased() == newChatInProfileHost
     }
 
+    /// A "New Chat in <Profile>" link with no `server=` item: the webui route a Shortcut saved
+    /// before #1180 keeps (#339, #971). One naming a server opens only there, or nowhere.
+    static func isWebuiNewChatInProfileURL(_ url: URL) -> Bool {
+        isNewChatInProfileURL(url)
+            && URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                .contains(where: { $0.name == serverQueryItem }) != true
+    }
+
     /// Extracts the profile name from a "New Chat in <Profile>" URL, or nil when the URL is a
     /// different kind or carries no (non-blank) profile.
     static func profileName(fromNewChatInProfile url: URL) -> String? {

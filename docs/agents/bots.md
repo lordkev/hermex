@@ -1670,8 +1670,9 @@ New Chat and New Chat with Voice on an active Hermes server, signed in or not, o
 there (`HermesNewChatDestination.onActiveServer`), never a webui server; on a webui server they are
 unchanged. New Chat in Profile takes a `ProfileEntity`: a Hermes server's Profile is
 `<server URL>|<profile>`, so the same name on two servers is two choices, and queues
-`new-chat-profile?server=…&profile=…`. A bare id is a webui profile and keeps its webui route, so
-a Shortcut saved before #1180 opens as it did (#971); every bare id resolves through
+`new-chat-profile?server=…&profile=…`; one whose server or Profile doesn't parse opens nothing
+(`HermesDeepLink.isWebuiNewChatInProfileURL`). A bare id is a webui profile and keeps its webui
+route, so a Shortcut saved before #1180 opens as it did (#971); every bare id resolves through
 `ProfileEntityProvider.profileServer`, the one place #707 can redirect them.
 
 `PendingLinks.hermesNewChat` routes from the registry and auth state as a session link does: a
@@ -1686,7 +1687,7 @@ The picker (`ProfileEntityQuery.suggestedEntities`) has a section per configured
 when only one server lists anything. A Hermes section reads the public `GET /api/status`
 `profiles` (names only, reported behind the sign-in too) with the server's saved Connection
 Headers and no sign-in, titled by the name the Bots roster last showed
-(`HermesProfileNameCache`, app group, per server, written on every roster read, kept across sign-out,
+(`HermesProfileNameCache`, app group, keyed by a digest of the server URL, written on every roster read, kept across sign-out,
 deleted with the server) with the Profile's name under it. An unreadable host lists that cache. A
 webui section, "<server> (Web UI)", is the `profileServer` list with its model · provider subtitle.
 A saved Hermes id resolves from the id while its server is configured, without a network read.

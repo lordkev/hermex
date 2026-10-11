@@ -325,8 +325,9 @@ private struct CachedProfile: Codable, Equatable {
 
 /// The Profile names each Hermes server's Bots roster last showed (#1180), in the app-group
 /// container, so the Shortcuts picker titles a host's Profiles as the app does and still lists
-/// them while the host can't be read or is signed out. One entry per server, written on every
-/// roster read and deleted with the server.
+/// them while the host can't be read or is signed out. One entry per server, keyed by a digest of
+/// its URL so the app group holds no server URL, written on every roster read and deleted with
+/// the server.
 struct HermesProfileNameCache {
     struct Name: Codable, Equatable {
         let profile: String
@@ -363,5 +364,5 @@ struct HermesProfileNameCache {
         defaults?.removeObject(forKey: key(server))
     }
 
-    private func key(_ server: URL) -> String { "hermesProfileNames.v1|\(server.absoluteString)" }
+    private func key(_ server: URL) -> String { "hermesProfileNames.v1|\(BotHistoryCache.Scope.key(server))" }
 }
