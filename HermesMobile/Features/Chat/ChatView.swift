@@ -498,15 +498,13 @@ struct ChatView: View {
     /// (#1145) shows the bot's pill in place of the title, keeps Bot Chat's rules
     /// (`HermesChatPolicy`) and calls `onChatReplaced` when its linked root was replaced. Update
     /// sign-in goes through the environment's `HermesUpdateSignInAction`. New Chat with Voice's
-    /// chat (#1180) starts dictation, and a share's (#1181) starts with the shared text and files.
+    /// chat (#1180) starts dictation.
     init(hermesSession: HermesSessionChat, onReplace: ((HermesSessionChat) -> Void)? = nil,
          onOpenSessions: ((HermesSessionListEntry) -> Void)? = nil, onChatReplaced: (() -> Void)? = nil) {
         self.init(
             session: SessionSummary(profile: hermesSession.target.profile),
             server: hermesSession.server,
             onAPIError: { _ in },
-            initialDraft: hermesSession.initialDraft,
-            initialAttachments: hermesSession.initialAttachments,
             autoStartsVoiceInput: hermesSession.autoStartsVoiceInput,
             hermesSession: hermesSession,
             onReplaceHermesSession: onReplace,
@@ -3227,18 +3225,13 @@ struct ChatView: View {
 
     /// A new Hermes chat in `profile` (#1015), remembered for this server's next New Session.
     /// A session's Profile never changes on the host. `replacing` a chat with nothing sent
-    /// carries its draft over, with a share's files it has not staged yet (#1181); otherwise the
-    /// new chat opens on top of this one.
+    /// carries its draft over; otherwise the new chat opens on top of this one.
     private func startHermesSession(in profile: ProfileSummary, replacing: Bool) {
         pendingProfileSelection = nil
-        guard let name = profile.normalizedName, var chat = viewModel.newHermesSessionChat(profile: name) else { return }
+        guard let name = profile.normalizedName, let chat = viewModel.newHermesSessionChat(profile: name) else { return }
         HermesProfilePreference.save(name, for: server)
         ChatHaptics.configurationSelected(isEnabled: isHapticsEnabled)
         if replacing, let onReplaceHermesSession {
-            if !didUploadInitialAttachments {
-                chat.initialAttachments = initialAttachments
-                didUploadInitialAttachments = true
-            }
             Task {
                 await viewModel.handOffHermesDraft(to: chat)
                 onReplaceHermesSession(chat)

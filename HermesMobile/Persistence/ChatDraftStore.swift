@@ -706,6 +706,52 @@ final class ChatDraftStore {
         return drafts[key]
     }
 
+    /// Adds a share to `key`'s draft (#1181): `text` after any unsent text and
+    /// `files` after any staged ones, so an earlier share waiting there is kept.
+    /// Each file gets its durable copy first; the records and text then land in
+    /// one change that is on disk before this returns, so the caller can let go
+    /// of the share. A throw (cancellation, storage) leaves the draft as it was.
+    func appendShare(
+        text: String, files: [(data: Data, name: String, mime: String, image: Bool)],
+        to key: ChatDraftKey, maximumFileBytes: Int
+    ) async throws {
+        let lease = makeAttachmentLease(key: key)
+        var records: [ChatDraftAttachment] = []
+        func deleteCopies() async {
+            for file in records.compactMap(\.file) {
+                lease.files.remove(file)
+                await deleteAttachmentIfUnreferenced(file)
+            }
+        }
+        do {
+            for file in files {
+                let id = UUID()
+                let copy = try await stageAttachment(
+                    data: file.data, filename: file.name, lease: lease, attachmentID: id, maximumFileBytes: maximumFileBytes
+                )
+                records.append(ChatDraftAttachment(id: id, name: file.name, mime: file.mime, size: file.data.count,
+                                                   isImage: file.image, file: copy))
+            }
+            try Task.checkCancellation()
+        } catch {
+            await deleteCopies()
+            throw error
+        }
+        let before = drafts[key]
+        updateDraft(for: key) { draft in
+            let unsent = draft.text.trimmingCharacters(in: .newlines)
+            if !text.isEmpty { draft.text = unsent.isEmpty ? text : unsent + "\n\n" + text }
+            draft.attachments += records
+        }
+        do {
+            try await flush()
+        } catch {
+            updateDraft(for: key) { $0 = before ?? ChatDraft() }
+            await deleteCopies()
+            throw error
+        }
+    }
+
     /// Replaces the draft's settings snapshot without disturbing its text or
     /// attachments.
     func setSettings(_ settings: ChatDraftSettings, for key: ChatDraftKey) {

@@ -1699,17 +1699,18 @@ A saved Hermes id resolves from the id while its server is configured, without a
 A share while a Hermes server is active opens a new session there, never a webui server. The
 extension and its app-group inbox are unchanged: `ContentView` reserves the next share and hands
 it to `HermesServerHome`, which turns to Sessions; without a saved connection it releases the
-share, which stays queued. The list opens `.new(profile:)` in New Session's Profile once it has
-read the host live (`SharedImportReservation.hermesOpening`, as a Shortcut's new chat), with the
-shared text and files in the composer (`HermesSessionChat.initialDraft`, `.initialAttachments`),
-then `ContentView` consumes the reservation. The files are staged like picked ones, so the
-first Send creates the session and uploads each file once (#1012). Leaving without sending keeps
-both in that Profile's new-session draft for the next New Session, as on webui, and a Profile
-picked before sending carries them into the new Profile's chat (#1015), unless a draft already
-waits there. A webui list opens one
-share and offers later ones in its Open Next banner; the Hermes home has none, so it opens each
-share as it arrives (`SharedImportGate`), and a later share's text replaces unsent text in the same
-Profile's new-session draft, as Open Next does on webui.
+share, which stays queued. Once the list has settled New Session's Profile and read the host live
+(`SharedImportReservation.hermesOpening`, as a Shortcut's new chat), it moves the share into that Profile's new-session
+draft (`moveIntoDraft`, `ChatDraftStore.appendShare`): the text goes after any unsent text and the
+files, prepared as a Hermes send takes them under Bot Chat's limits, after any staged ones, all
+written to disk before `ContentView` consumes the reservation. A failed move releases the share
+and one cut short by leaving the list keeps it reserved, so a staged share is never lost. The
+list then pushes `.new(profile:)`, whose composer restores that draft, and the first Send creates
+the session and uploads each file once (#1012). Leaving without sending keeps it for the next New
+Session, and a Profile picked before sending carries the draft into the new Profile's chat
+(#1015), unless a draft already waits there. A webui list opens one share and offers later ones in
+its Open Next banner; the Hermes home has none, so it opens each share as it arrives
+(`SharedImportGate`), and each adds to whatever the same Profile's draft already holds.
 
 ## Bot lifecycle
 

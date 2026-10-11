@@ -227,8 +227,8 @@ struct ContentView: View {
         }
     }
 
-    /// Keeps a share the Hermes home can't open (it has no saved connection) queued, to be
-    /// offered again on the next launch or return to the app.
+    /// Keeps a share the Hermes home can't open (it has no saved connection, or its draft
+    /// couldn't take it) queued, to be offered again on the next launch or return to the app.
     private func releasePendingSharedImport(_ reservation: SharedImportReservation) {
         if pendingSharedImport?.reservationID == reservation.reservationID { pendingSharedImport = nil }
         guard let directory = HermesShareDraft.containerURL() else { return }
@@ -341,8 +341,9 @@ struct HermesServerHome: View {
     @Binding var pendingBotDestination: BotDestination?
     @Binding var pendingSessionDestination: HermesSessionDestination?
     @Binding var pendingNewChat: HermesNewChatDestination?
-    /// The share `ContentView` reserved; the list routes it, and without a saved connection the
-    /// home declines it, which keeps it queued.
+    /// The share `ContentView` reserved; the list routes it once its new session's draft holds
+    /// it. The home declines it without a saved connection, and the list when that move fails,
+    /// which keeps it queued.
     let pendingShare: SharedImportReservation?
     let didRouteShare: (SharedImportReservation) -> Void
     let didDeclineShare: (SharedImportReservation) -> Void
@@ -380,7 +381,8 @@ struct HermesServerHome: View {
                 if tab == .sessions, let sessions {
                     HermesSessionListView(entry: sessions.entry, model: sessions.model, home: home,
                                           pendingLink: $pendingSessionDestination, pendingNewChat: $pendingNewChat,
-                                          pendingShare: pendingShare, didRouteShare: didRouteShare)
+                                          pendingShare: pendingShare, didRouteShare: didRouteShare,
+                                          didDeclineShare: didDeclineShare)
                         .id(sessions.entry.id)
                 } else {
                     BotsInboxView(server: server, pendingDestination: $pendingBotDestination, home: home, inbox: inbox)
