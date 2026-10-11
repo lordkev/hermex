@@ -472,6 +472,31 @@ import Observation
         XCTAssertEqual(chat()?.target, .new(profile: "research"))
     }
 
+    /// A list that read the host and then lost it, closed or dropped, holds a Shortcut's new
+    /// chat again (#1180) until its next read, rather than opening a chat on a host it can't reach.
+    func testANewChatWaitsAgainAfterTheListLosesTheHost() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: page([HermesSessionRow(id: "a")])]
+        let list = makeList(wire)
+        let entry = HermesSessionListEntry(server: server, connection: connection, profile: "default")
+        let request = HermesNewChatDestination(server: server, profile: "research")
+        let chat = { request.chat(on: entry, listed: list.hermesProfile, isLive: list.isHermesLive) }
+        await list.openHermes()
+        XCTAssertTrue(list.isHermesLive)
+
+        list.closeHermes()
+        XCTAssertFalse(list.isHermesLive)
+        XCTAssertNil(chat(), "Held once the list closes its connection")
+        await list.openHermes()
+        XCTAssertEqual(chat()?.target, .new(profile: "research"))
+
+        wire.onDisconnect?(BotFailure.transport)
+        XCTAssertFalse(list.isHermesLive)
+        XCTAssertNil(chat(), "Held once the list's socket drops")
+        await list.openHermes()
+        XCTAssertEqual(chat()?.target, .new(profile: "research"))
+    }
+
     /// A Shortcut's new chat arriving while a cached chat covers the paused list (#1180) closes it
     /// at once, so the list shows and reads the host again (its appearing reopens it), and the new
     /// chat opens after that read rather than waiting for the user to go back to Sessions.
