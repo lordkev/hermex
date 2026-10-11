@@ -427,6 +427,37 @@ final class SharedDraftStoreTests: XCTestCase {
                                 sharedImport: SharedImport(draft: draft, attachments: attachments))
     }
 
+    /// A Hermes home has no Open Next banner: each queued share is reserved as the one before it
+    /// is routed. A webui session list keeps the next one waiting for Open Next.
+    func testQueuedSharesOpenOneAfterAnotherOnlyOnAHermesHome() throws {
+        let servers = [account(hermes, .hermes), account(webui, .webui)]
+        func queue(_ active: URL) throws -> (SharedImportQueue, URL) {
+            let directory = try temporaryDirectory()
+            try HermesShareDraft.savePendingDraft("First", in: directory, now: Date(timeIntervalSince1970: 1_800_000_010))
+            try HermesShareDraft.savePendingDraft("Second", in: directory, now: Date(timeIntervalSince1970: 1_800_000_020))
+            var queue = SharedImportQueue()
+            queue.reserveNext(in: directory, active: active, servers: servers)
+            return (queue, directory)
+        }
+
+        var (onHermes, hermesInbox) = try queue(hermes)
+        let first = try XCTUnwrap(onHermes.pending)
+        XCTAssertEqual(first.sharedImport.draft, "First")
+        onHermes.consume(first, in: hermesInbox, active: hermes, servers: servers)
+        let second = try XCTUnwrap(onHermes.pending, "The next share opens once the first is routed")
+        XCTAssertEqual(second.sharedImport.draft, "Second")
+        onHermes.consume(second, in: hermesInbox, active: hermes, servers: servers)
+        XCTAssertNil(onHermes.pending)
+        XCTAssertFalse(onHermes.hasWaiting)
+
+        var (onWebui, webuiInbox) = try queue(webui)
+        onWebui.consume(try XCTUnwrap(onWebui.pending), in: webuiInbox, active: webui, servers: servers)
+        XCTAssertNil(onWebui.pending, "A webui list offers the next share in its banner")
+        XCTAssertTrue(onWebui.hasWaiting)
+        onWebui.openNext(in: webuiInbox, active: webui, servers: servers)
+        XCTAssertEqual(onWebui.pending?.sharedImport.draft, "Second")
+    }
+
     @MainActor
     func testTheHermesSessionsListOpensAShareAsANewSessionOnceItCan() throws {
         let connection = BotConnection(id: UUID(), name: "Host", address: hermes, username: "me", password: "secret")

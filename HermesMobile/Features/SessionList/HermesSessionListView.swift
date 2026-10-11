@@ -259,9 +259,11 @@ struct HermesSessionListView: View {
         .onChange(of: pendingLink, initial: true) { covers.accept(pendingLink, on: entry.server) }
         .task(id: pendingLink) { await openPendingLink() }
         // A Shortcut's new session brings the rows forward at once; it and a share open once the
-        // list has read the host live, whichever Profile the request names.
+        // list has read the host live, whichever Profile the request names. A share reserved while
+        // another moves into its draft opens once that move ends.
         .onChange(of: NewChatReadiness(request: pendingNewChat, share: pendingShare?.reservationID, profile: profile,
-                                       isLive: viewModel.isHermesLive), initial: true) {
+                                       isLive: viewModel.isHermesLive, isTransferringShare: shareTransfer != nil),
+                  initial: true) {
             openPendingNewChat()
             openPendingShare()
         }
@@ -724,12 +726,13 @@ extension SharedImportReservation {
 }
 
 /// What a Shortcut's new session and a share wait on: the request or share, New Session's
-/// Profile, and the list's live read of the host.
+/// Profile, the list's live read of the host, and the end of an earlier share's move.
 private struct NewChatReadiness: Equatable {
     let request: HermesNewChatDestination?
     let share: String?
     let profile: String?
     let isLive: Bool
+    let isTransferringShare: Bool
 }
 
 /// What a search runs against: a new query, Profile or All Profiles cancels the one in flight.
