@@ -52,10 +52,13 @@ struct HermesSessionListView: View {
     @Binding private var pendingLink: HermesSessionDestination?
     /// The new session a Shortcut asked for, held by `ContentView` until this list can open it.
     @Binding private var pendingNewChat: HermesNewChatDestination?
-    /// The share `ContentView` reserved, and how this list tells it the share is open.
+    /// The share `ContentView` reserved, and how this list tells it the share is moving, open,
+    /// declined or cut short.
     private let pendingShare: SharedImportReservation?
+    private let claimShare: (SharedImportReservation) -> Bool
     private let didRouteShare: (SharedImportReservation) -> Void
     private let didDeclineShare: (SharedImportReservation) -> Void
+    private let didAbandonShare: (SharedImportReservation) -> Void
     /// Moving `pendingShare` into its new session's draft; leaving cancels it.
     @State private var shareTransfer: Task<Void, Never>?
     @State private var viewModel: SessionListViewModel
@@ -81,15 +84,19 @@ struct HermesSessionListView: View {
          pendingLink: Binding<HermesSessionDestination?> = .constant(nil),
          pendingNewChat: Binding<HermesNewChatDestination?> = .constant(nil),
          pendingShare: SharedImportReservation? = nil,
+         claimShare: @escaping (SharedImportReservation) -> Bool = { _ in false },
          didRouteShare: @escaping (SharedImportReservation) -> Void = { _ in },
-         didDeclineShare: @escaping (SharedImportReservation) -> Void = { _ in }) {
+         didDeclineShare: @escaping (SharedImportReservation) -> Void = { _ in },
+         didAbandonShare: @escaping (SharedImportReservation) -> Void = { _ in }) {
         self.entry = entry
         self.home = home
         _pendingLink = pendingLink
         _pendingNewChat = pendingNewChat
         self.pendingShare = pendingShare
+        self.claimShare = claimShare
         self.didRouteShare = didRouteShare
         self.didDeclineShare = didDeclineShare
+        self.didAbandonShare = didAbandonShare
         _searchText = State(initialValue: entry.query)
         _viewModel = State(initialValue: model)
     }
@@ -557,14 +564,16 @@ struct HermesSessionListView: View {
     }
 
     /// Opens a share (#1181) as a new session over whatever covers the rows, once `transfer` has
-    /// moved it into that session's draft and let it go. A transfer that fails keeps it queued and
-    /// says why; one cut short by leaving keeps it here for the next try.
+    /// moved it into that session's draft and let it go. The share is claimed for the move, so no
+    /// home, here or on another server, starts a second one. A transfer that fails keeps it queued
+    /// and says why; one cut short by leaving hands it back for the next try.
     private func openPendingShare() {
         guard shareTransfer == nil, let share = pendingShare,
               let opening = share.hermesOpening(on: entry, listed: profile, isLive: viewModel.isHermesLive) else {
             return
         }
         guard case .chat(let chat) = opening else { return didRouteShare(share) }
+        guard claimShare(share) else { return }
         shareTransfer = Task {
             do {
                 try await share.transfer(into: chat, route: didRouteShare, decline: didDeclineShare)
@@ -573,6 +582,7 @@ struct HermesSessionListView: View {
                     covers.chat = chat
                 }
             } catch is CancellationError {
+                didAbandonShare(share)
             } catch {
                 if !Task.isCancelled {
                     showLinkNotice((error as? BotAttachmentFailure)?.localizedDescription

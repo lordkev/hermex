@@ -872,6 +872,69 @@ final class SharedDraftStoreTests: XCTestCase {
         XCTAssertEqual(kept, 0)
     }
 
+    /// A share moving into one Hermes server's draft is offered to no home until that move ends,
+    /// so switching servers mid-write can't open it into a second server's draft: the first
+    /// server's draft takes it and it is consumed once.
+    @MainActor
+    func testAShareMovingIntoOneServersDraftIsNotOpenedOnAnother() async throws {
+        let other = URL(string: "https://other.example:9119")!
+        let servers = [account(hermes, .hermes), account(other, .hermes)]
+        let inbox = try temporaryDirectory()
+        try HermesShareDraft.savePendingDraft("Read this", in: inbox)
+        let shares = QueueBox()
+        shares.queue.reserveNext(in: inbox, active: hermes, servers: servers)
+        let share = try XCTUnwrap(shares.queue.pending)
+        let disk = PausingDrafts()
+        let store = ChatDraftStore(persistence: disk, attachmentStore: BotAttachmentCopies(), debounceDuration: .seconds(3600))
+        let (chat, key) = newSession()
+        let routed = Tally()
+
+        XCTAssertTrue(shares.queue.claim(share))
+        await disk.pauseNextWrite()
+        let move = Task {
+            try await share.transfer(into: chat, drafts: store, route: {
+                routed.count += 1
+                shares.queue.consume($0, in: inbox, active: other, servers: servers)
+            }, decline: { _ in XCTFail("Nothing failed") })
+        }
+        await disk.waitUntilPaused()
+        // The user switches to the other server while the draft is being written.
+        move.cancel()
+        shares.queue.reserveNext(in: inbox, active: other, servers: servers)
+        XCTAssertNil(shares.queue.pending, "The other server's home is offered nothing while the move runs")
+        XCTAssertFalse(shares.queue.claim(share), "Nor can it start a second move")
+        await disk.resume()
+        try await move.value
+
+        XCTAssertEqual(routed.count, 1)
+        XCTAssertNil(shares.queue.pending)
+        XCTAssertNil(try HermesShareDraft.reserveNextPendingImport(from: inbox), "The share is consumed")
+        let draft = await store.draft(for: key)
+        XCTAssertEqual(draft?.text, "Read this\n")
+    }
+
+    /// A move cut short before the draft took the share frees it for any home at once; one the
+    /// draft couldn't take is queued again for the next home to reserve.
+    func testAShareWhoseMoveEndsOutsideTheDraftIsOfferedAgain() throws {
+        let other = URL(string: "https://other.example:9119")!
+        let servers = [account(hermes, .hermes), account(other, .hermes)]
+        let inbox = try temporaryDirectory()
+        try HermesShareDraft.savePendingDraft("Read this", in: inbox)
+        var queue = SharedImportQueue()
+        queue.reserveNext(in: inbox, active: hermes, servers: servers)
+        let share = try XCTUnwrap(queue.pending)
+
+        XCTAssertTrue(queue.claim(share))
+        XCTAssertNil(queue.pending)
+        queue.abandon(share)
+        XCTAssertEqual(queue.pending?.reservationID, share.reservationID, "Any server's home may open it again")
+
+        XCTAssertTrue(queue.claim(share))
+        queue.release(share, in: inbox)
+        queue.reserveNext(in: inbox, active: other, servers: servers)
+        XCTAssertEqual(queue.pending?.itemID, share.itemID, "The other server's home takes the released share")
+    }
+
     func testAHermesServerOpensEachShareAsItArrives() {
         let servers = [account(hermes, .hermes), account(webui, .webui)]
         XCTAssertTrue(SharedImportGate.opensNext(afterRouting: false, active: webui, servers: servers))
@@ -936,6 +999,10 @@ private actor PausingCopies: ChatDraftAttachmentStoring {
     func fileURL(named fileName: String) async throws -> URL { try await copies.fileURL(named: fileName) }
     func delete(named fileName: String) async { await copies.delete(named: fileName) }
     func sweep(keepingReferenced fileNames: Set<String>, olderThan maxAge: TimeInterval) async {}
+}
+
+@MainActor private final class QueueBox {
+    var queue = SharedImportQueue()
 }
 
 @MainActor private final class Tally {

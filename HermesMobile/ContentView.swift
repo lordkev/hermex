@@ -94,8 +94,9 @@ struct ContentView: View {
             HermesServerHome(authManager: authManager, server: server, pendingBotDestination: $pendingLinks.bot,
                              pendingSessionDestination: $pendingLinks.hermesSession,
                              pendingNewChat: $pendingLinks.hermesNewChat,
-                             pendingShare: shares.pending, didRouteShare: consumePendingSharedImport,
-                             didDeclineShare: releasePendingSharedImport)
+                             pendingShare: shares.pending, claimShare: { shares.claim($0) },
+                             didRouteShare: consumePendingSharedImport, didDeclineShare: releasePendingSharedImport,
+                             didAbandonShare: { shares.abandon($0) })
                 .id(server)
         case .loggedOut(let server):
             OnboardingView(authManager: authManager, savedServer: server)
@@ -254,18 +255,20 @@ struct ContentView: View {
 }
 
 /// The shares waiting in the app group, handed to the active server's home one at a time
-/// (#1181): the one reserved for it, whether more wait, and whether one was routed since the
-/// last Open Next. `ContentView` owns it; a nil directory (no app group) reserves nothing.
+/// (#1181): the one reserved for it or being moved into a Hermes draft, whether more wait, and
+/// whether one was routed since the last Open Next. `ContentView` owns it; a nil directory (no app group) reserves nothing.
 struct SharedImportQueue {
     /// The reserved share the active home is opening.
     var pending: SharedImportReservation?
     /// More shares wait behind it, which a webui session list offers in its Open Next banner.
     private(set) var hasWaiting = false
     private var hasRouted = false
+    /// The share a Hermes list is moving into its draft (`claim`), offered to no home meanwhile.
+    private var moving: SharedImportReservation?
 
     /// Reserves the next waiting share when the active home opens it now (`SharedImportGate`).
     mutating func reserveNext(in directory: URL?, active: URL?, servers: [ServerAccount]) {
-        guard pending == nil, let directory else { return }
+        guard pending == nil, moving == nil, let directory else { return }
         guard SharedImportGate.opensNext(afterRouting: hasRouted, active: active, servers: servers) else {
             return refreshWaiting(in: directory)
         }
@@ -283,7 +286,7 @@ struct SharedImportQueue {
     mutating func consume(_ reservation: SharedImportReservation, in directory: URL?, active: URL?,
                           servers: [ServerAccount]) {
         hasRouted = true
-        if pending?.reservationID == reservation.reservationID { pending = nil }
+        settle(reservation)
         guard let directory else { return }
         do {
             try HermesShareDraft.consume(reservation, from: directory)
@@ -299,10 +302,28 @@ struct SharedImportQueue {
     /// Keeps a share the Hermes home can't open queued, to be offered again on the next launch
     /// or return to the app.
     mutating func release(_ reservation: SharedImportReservation, in directory: URL?) {
-        if pending?.reservationID == reservation.reservationID { pending = nil }
+        settle(reservation)
         guard let directory else { return }
         try? HermesShareDraft.release(reservation, in: directory)
         refreshWaiting(in: directory)
+    }
+
+    /// A Hermes list starts moving `reservation` into a draft: no home is offered it again until
+    /// the move ends in `consume`, `release` or `abandon`, so a server switch mid-move can't open
+    /// it in a second server's draft. False when it isn't the pending share.
+    mutating func claim(_ reservation: SharedImportReservation) -> Bool {
+        guard pending?.reservationID == reservation.reservationID else { return false }
+        moving = pending
+        pending = nil
+        return true
+    }
+
+    /// The move was cut short before the draft took the share, so whichever home is active
+    /// opens it again.
+    mutating func abandon(_ reservation: SharedImportReservation) {
+        guard moving?.reservationID == reservation.reservationID else { return }
+        pending = moving
+        moving = nil
     }
 
     /// A webui session list's Open Next.
@@ -310,6 +331,11 @@ struct SharedImportQueue {
         hasWaiting = false
         hasRouted = false
         reserveNext(in: directory, active: active, servers: servers)
+    }
+
+    private mutating func settle(_ reservation: SharedImportReservation) {
+        if pending?.reservationID == reservation.reservationID { pending = nil }
+        if moving?.reservationID == reservation.reservationID { moving = nil }
     }
 
     private mutating func refreshWaiting(in directory: URL) {
@@ -356,12 +382,15 @@ struct HermesServerHome: View {
     @Binding var pendingBotDestination: BotDestination?
     @Binding var pendingSessionDestination: HermesSessionDestination?
     @Binding var pendingNewChat: HermesNewChatDestination?
-    /// The share `ContentView` reserved; the list routes it once its new session's draft holds
-    /// it. The home declines it without a saved connection, and the list when that move fails,
-    /// which keeps it queued.
+    /// The share `ContentView` reserved; the list claims it as it starts moving it into its new
+    /// session's draft and routes it once the draft holds it. The home declines it without a saved
+    /// connection, and the list when that move fails, which keeps it queued; a move cut short
+    /// abandons it to whichever home is active.
     let pendingShare: SharedImportReservation?
+    let claimShare: (SharedImportReservation) -> Bool
     let didRouteShare: (SharedImportReservation) -> Void
     let didDeclineShare: (SharedImportReservation) -> Void
+    let didAbandonShare: (SharedImportReservation) -> Void
     @SceneStorage("hermesHome.tab") private var tab = HermesHomeTab.sessions
     @State private var inbox: BotInbox
     /// The Sessions side's list on the saved Bot connection, read again each time a side shows,
@@ -373,16 +402,20 @@ struct HermesServerHome: View {
 
     init(authManager: AuthManager, server: URL, pendingBotDestination: Binding<BotDestination?>,
          pendingSessionDestination: Binding<HermesSessionDestination?>, pendingNewChat: Binding<HermesNewChatDestination?>,
-         pendingShare: SharedImportReservation?, didRouteShare: @escaping (SharedImportReservation) -> Void,
-         didDeclineShare: @escaping (SharedImportReservation) -> Void) {
+         pendingShare: SharedImportReservation?, claimShare: @escaping (SharedImportReservation) -> Bool,
+         didRouteShare: @escaping (SharedImportReservation) -> Void,
+         didDeclineShare: @escaping (SharedImportReservation) -> Void,
+         didAbandonShare: @escaping (SharedImportReservation) -> Void) {
         self.authManager = authManager
         self.server = server
         _pendingBotDestination = pendingBotDestination
         _pendingSessionDestination = pendingSessionDestination
         _pendingNewChat = pendingNewChat
         self.pendingShare = pendingShare
+        self.claimShare = claimShare
         self.didRouteShare = didRouteShare
         self.didDeclineShare = didDeclineShare
+        self.didAbandonShare = didAbandonShare
         _inbox = State(initialValue: BotInbox(server: server))
         _sessions = State(initialValue: HermesSessionsSide(server: server))
     }
@@ -396,8 +429,9 @@ struct HermesServerHome: View {
                 if tab == .sessions, let sessions {
                     HermesSessionListView(entry: sessions.entry, model: sessions.model, home: home,
                                           pendingLink: $pendingSessionDestination, pendingNewChat: $pendingNewChat,
-                                          pendingShare: pendingShare, didRouteShare: didRouteShare,
-                                          didDeclineShare: didDeclineShare)
+                                          pendingShare: pendingShare, claimShare: claimShare,
+                                          didRouteShare: didRouteShare, didDeclineShare: didDeclineShare,
+                                          didAbandonShare: didAbandonShare)
                         .id(sessions.entry.id)
                 } else {
                     BotsInboxView(server: server, pendingDestination: $pendingBotDestination, home: home, inbox: inbox)

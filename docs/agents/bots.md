@@ -1706,7 +1706,10 @@ text and the files, prepared as a Hermes send takes them under Bot Chat's limits
 ones, all written to disk before `ContentView` consumes the reservation. A file that can't go now
 (its type or size, an unreadable image, a full draft, rechecked as the move commits) fails the
 whole move, which releases the share; one
-cut short by leaving the list keeps it reserved, so a staged share is never lost. The draft records
+cut short by leaving the list hands it back still reserved (`SharedImportQueue.abandon`), so a
+staged share is never lost. The list claims the share as its move starts, and no home, on this
+server or another, is offered it until that move ends, so a server switch mid-write can't put it
+in two servers' drafts. The draft records
 the share's item id with its content (`ChatDraft.sharedImportIDs`), so a retry, or a replay after
 the app quit before consuming, adds nothing and is consumed. A composer already open on that draft
 keeps records it never saw (`setAttachments(_:replacing:for:)`), and a move whose records or text
