@@ -204,34 +204,31 @@ struct SettingsView: View {
 
                     SettingsDivider()
 
-                    // Push on a Hermes server waits for #706.
-                    if !isHermesServer {
-                        // A wrapper carries the scroll anchor: the section's own id is its server.
-                        VStack(alignment: .leading, spacing: 0) {
-                            HermexPushSectionView(server: server, startsExpanded: initialScrollTarget == .notifications) {
-                                SettingsToggleRow(
-                                    title: String(localized: "Response Complete Alerts"),
-                                    systemImage: "bell",
-                                    isOn: responseCompletionNotificationBinding
-                                )
-                                SettingsFootnote(String(localized: "Alerts when a reply finishes or fails, for servers without push notifications."))
-                                if let notificationStatusText {
-                                    SettingsFootnote(notificationStatusText)
-                                }
-                                SettingsDivider()
-                                SettingsToggleRow(
-                                    title: String(localized: "Live Activity Excerpts"),
-                                    systemImage: "lock",
-                                    isOn: $showsLiveActivityResponseExcerpts
-                                )
-                                SettingsFootnote(String(localized: "Shows short response text on the Lock Screen and Dynamic Island."))
+                    // A wrapper carries the scroll anchor: the section's own id is its server.
+                    VStack(alignment: .leading, spacing: 0) {
+                        HermexPushSectionView(server: server, startsExpanded: initialScrollTarget == .notifications) {
+                            SettingsToggleRow(
+                                title: String(localized: "Response Complete Alerts"),
+                                systemImage: "bell",
+                                isOn: responseCompletionNotificationBinding
+                            )
+                            SettingsFootnote(String(localized: "Alerts when a reply finishes or fails, for servers without push notifications."))
+                            if let notificationStatusText {
+                                SettingsFootnote(notificationStatusText)
                             }
-                            .id(server)
+                            SettingsDivider()
+                            SettingsToggleRow(
+                                title: String(localized: "Live Activity Excerpts"),
+                                systemImage: "lock",
+                                isOn: $showsLiveActivityResponseExcerpts
+                            )
+                            SettingsFootnote(String(localized: "Shows short response text on the Lock Screen and Dynamic Island."))
                         }
-                        .id(SettingsScrollAnchor.notifications)
-
-                        SettingsDivider()
+                        .id(server)
                     }
+                    .id(SettingsScrollAnchor.notifications)
+
+                    SettingsDivider()
 
                     SettingsPickerRow(
                         title: String(localized: "Send While Responding"),
