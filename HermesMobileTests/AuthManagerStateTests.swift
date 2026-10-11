@@ -599,7 +599,8 @@ final class AuthManagerStateTests: XCTestCase {
         registry: ServerRegistry? = nil,
         connections: HermesConnections? = nil,
         headerStore: CustomHeaderStore = CustomHeaderStore(),
-        preferences: UserDefaults = .ephemeral()
+        preferences: UserDefaults = .ephemeral(),
+        forgetPush: @escaping @MainActor (URL) async -> Void = { _ in }
     ) async throws -> AuthManager {
         preferences.set(true, forKey: BotModeGate.isEnabledKey)
         let manager = AuthManager(
@@ -608,7 +609,8 @@ final class AuthManagerStateTests: XCTestCase {
             headerStore: headerStore,
             serverRegistry: registry ?? ServerRegistry.inMemory(keychain: keychain),
             hermesConnections: connections ?? HermesConnections(),
-            preferences: preferences
+            preferences: preferences,
+            forgetPush: forgetPush
         )
         await manager.configure(
             serverURLString: webuiServer.absoluteString, password: "",
@@ -741,7 +743,9 @@ final class AuthManagerStateTests: XCTestCase {
     func testSigningOutOfAHermesServerDeletesOnlyItsSignInAndShowsItsForm() async throws {
         let keychain = InMemoryKeychainStore()
         let preferences = UserDefaults.ephemeral()
-        let manager = try await makeHermesManager(keychain: keychain, preferences: preferences)
+        var forgottenPush: [URL] = []
+        let manager = try await makeHermesManager(keychain: keychain, preferences: preferences,
+                                                  forgetPush: { forgottenPush.append($0) })
         HermesProfilePreference.save("work", for: hermesServer, in: preferences)
         HermesProfilePreference.save("work", for: webuiServer, in: preferences)
         let side = BotConnection(id: UUID(), name: "Side", address: hermesServer, username: "me", password: "secret")
@@ -759,6 +763,19 @@ final class AuthManagerStateTests: XCTestCase {
         XCTAssertNil(preferences.string(forKey: HermesProfilePreference.key(for: hermesServer)),
                      "the remembered Profile goes with the sign-in (#1015)")
         XCTAssertEqual(preferences.string(forKey: HermesProfilePreference.key(for: webuiServer)), "work")
+        XCTAssertEqual(forgottenPush, [hermesServer], "this iPhone stops getting the host's pushes")
+    }
+
+    /// Removing a paired Hermes server tears down its push pairing, as a webui server's
+    /// removal does; `PushRegistrar.forget` keeps a relay device another entry still holds.
+    func testRemovingAHermesServerForgetsItsPushPairing() async throws {
+        var forgottenPush: [URL] = []
+        let manager = try await makeHermesManager(forgetPush: { forgottenPush.append($0) })
+        let account = try XCTUnwrap(manager.activeServer)
+
+        await manager.removeServer(account)
+
+        XCTAssertEqual(forgottenPush, [hermesServer])
     }
 
     /// The Hermes server shares the webui server's host on another port, where cookies

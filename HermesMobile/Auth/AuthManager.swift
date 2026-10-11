@@ -78,6 +78,8 @@ final class AuthManager {
     private let hermesConnections: HermesConnections
     /// Where the Bot Mode gate is read (`BotModeGate`), which adding a Hermes server needs.
     private let preferences: UserDefaults
+    /// Tears down a server's push pairing when it is signed out of or removed.
+    private let forgetPush: @MainActor (URL) async -> Void
 
     init(
         keychain: any KeychainStoring = KeychainStore(),
@@ -89,7 +91,8 @@ final class AuthManager {
         logoutTimeout: Duration = .seconds(5),
         serverRegistry: ServerRegistry = .shared,
         hermesConnections: HermesConnections? = nil,
-        preferences: UserDefaults = .standard
+        preferences: UserDefaults = .standard,
+        forgetPush: @escaping @MainActor (URL) async -> Void = { await PushRegistrar.shared?.forget(for: $0) }
     ) {
         self.keychain = keychain
         self.clientFactory = clientFactory
@@ -99,6 +102,7 @@ final class AuthManager {
         self.serverRegistry = serverRegistry
         self.hermesConnections = hermesConnections ?? .shared
         self.preferences = preferences
+        self.forgetPush = forgetPush
         restoreSavedServer()
         refreshServers()
         self.hermesConnections.onSignInRejected = { [weak self] server in self?.hermesSignInRejected(server: server) }
@@ -440,7 +444,8 @@ final class AuthManager {
     /// drops it locally and auto-switches to the next remaining server — returning
     /// to onboarding only when none remain (#17). A single-server install behaves
     /// exactly as before (sign out → onboarding). A Hermes server stays configured: its
-    /// record and Bot data are deleted and its sign-in form shows, with its address (#899).
+    /// record, Bot data and push pairing are deleted and its sign-in form shows, with its
+    /// address (#899).
     func signOut() async {
         guard let active = state.server else {
             // Defensive: nothing is active. Safe full reset to onboarding.
@@ -452,6 +457,7 @@ final class AuthManager {
         if kind(of: active) == .hermes {
             try? await BotHistoryCache.shared.removeServer(active, activeConnectionID: (try? BotConnectionStore(keychain: keychain).load(server: active))?.id)
             await ChatDraftStore.shared.discardBotDrafts(server: active)
+            await forgetPush(active)
             removeBotConnection(for: active)
             lastErrorMessage = nil
             state = .loggedOut(server: active)
@@ -465,7 +471,7 @@ final class AuthManager {
         try? await BotHistoryCache.shared.removeServer(active, activeConnectionID: (try? BotConnectionStore(keychain: keychain).load(server: active))?.id)
         SessionUnreadStore().remove(for: active)
         await ChatDraftStore.shared.discardBotDrafts(server: active)
-        await PushRegistrar.shared?.forget(for: active)
+        await forgetPush(active)
         advanceAfterRemoving(activeServer: active)
     }
 
@@ -480,8 +486,7 @@ final class AuthManager {
         // Kept through a sign-out, which the Shortcuts picker still lists the server's Profiles across (#1180).
         HermesProfileNameCache.shared.remove(server: serverURL)
         await ChatDraftStore.shared.discardBotDrafts(server: serverURL)
-        // A Hermes server has no push pairing until #706, so the relay is never called for one.
-        if account.kind == .webui { await PushRegistrar.shared?.forget(for: serverURL) }
+        await forgetPush(serverURL)
         let isActive = state.server?.absoluteString == account.id
 
         if isActive {
