@@ -116,20 +116,30 @@ enum HermesSessionLinkOutcome: Equatable {
         }
     }
 
-    /// The found row as the host's list projects a legacy compression chain: identified under its
-    /// root, reached by stepping up while the parent ended in compression, at most
-    /// `lineageHopLimit` parents. The chain keeps its root's `hidden` and start, and an untitled
-    /// tip shows the root's title. The row stays the found one's, which the chat opens by.
-    private static func listRow(_ found: BotJSON, profile: String, on wire: any BotTransport) async throws -> HermesSessionRow {
+    /// The root of `found`'s legacy compression chain, reached by stepping up while the parent
+    /// ended in compression; `found` itself when it has none. Nil when the root is more than
+    /// `lineageHopLimit` parents up (or the chain cycles): the walk can't prove which row it is.
+    private static func lineageRoot(of found: BotJSON, profile: String, on wire: any BotTransport) async throws -> BotJSON? {
         var top = found
-        for _ in 0..<lineageHopLimit {
-            guard let parent = top["parent_session_id"].text, !parent.isEmpty,
-                  let row = try await exactRow(parent, profile: profile, on: wire),
-                  row["end_reason"].text == "compression" else { break }
+        var hops = 0
+        while let parent = top["parent_session_id"].text, !parent.isEmpty,
+              let row = try await exactRow(parent, profile: profile, on: wire),
+              row["end_reason"].text == "compression" {
+            guard hops < lineageHopLimit else { return nil }
             top = row
+            hops += 1
         }
+        return top
+    }
+
+    /// The found row as the host's list projects a legacy compression chain: identified under its
+    /// `lineageRoot`. The chain keeps its root's `hidden` and start, and an untitled tip shows the
+    /// root's title. The row stays the found one's, which the chat opens by. A chain whose root
+    /// the walk can't reach keeps the found row's own identity, as an unchained row does, rather
+    /// than a middle segment's that neither the list nor a later link would share.
+    private static func listRow(_ found: BotJSON, profile: String, on wire: any BotTransport) async throws -> HermesSessionRow {
         let own = try JSONDecoder().decode(HermesSessionRow.self, from: JSONEncoder().encode(found))
-        guard top != found else { return own }
+        guard let top = try await lineageRoot(of: found, profile: profile, on: wire), top != found else { return own }
         let root = try JSONDecoder().decode(HermesSessionRow.self, from: JSONEncoder().encode(top))
         return HermesSessionRow(
             id: own.id, title: own.title ?? root.title, preview: own.preview, lastActive: own.lastActive,

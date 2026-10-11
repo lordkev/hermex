@@ -123,16 +123,24 @@ import XCTest
         XCTAssertEqual(wire.reads, ["research/tip", "research/middle", "research/root", "research/forked-from"])
     }
 
-    func testTheLineageWalkStopsAfterEightHops() async throws {
-        let wire = LookupWire()
-        var rows = ["s0": row("s0", "research", parent: "s1")]
-        for hop in 1...12 { rows["s\(hop)"] = row("s\(hop)", "research", parent: "s\(hop + 1)", endReason: "compression") }
-        wire.rows = ["research": rows]
+    /// The walk follows at most eight parents. A root eight up is the chain's; a ninth rotation
+    /// leaves the root unproven, so the tip keeps its own identity rather than a middle segment's.
+    func testTheLineageWalkIdentifiesOnlyARootItReaches() async throws {
+        func resolve(rotations: Int) async throws -> (SessionSummary, LookupWire) {
+            let wire = LookupWire()
+            var rows = ["s0": row("s0", "research", parent: "s1")]
+            for hop in 1...rotations {
+                rows["s\(hop)"] = row("s\(hop)", "research", parent: hop == rotations ? nil : "s\(hop + 1)", endReason: "compression")
+            }
+            wire.rows = ["research": rows]
+            return (try found(try await HermesSessionLookup.resolve(link("s0", profile: "research"), on: wire)), wire)
+        }
 
-        let session = try found(try await HermesSessionLookup.resolve(link("s0", profile: "research"), on: wire))
-
-        XCTAssertEqual(session.hermes?.lineageRoot, "s8")
-        XCTAssertEqual(wire.reads.count, 9)
+        let (reached, _) = try await resolve(rotations: 8)
+        XCTAssertEqual(reached.hermes?.lineageRoot, "s8")
+        let (unfinished, wire) = try await resolve(rotations: 12)
+        XCTAssertEqual(unfinished.hermes?.lineageRoot, "s0", "A walk stopped by the limit names no root")
+        XCTAssertEqual(wire.reads.count, 10, "The tip, eight parents, and the ninth that proves the limit was hit")
     }
 
     /// A bot's Bot Chat opens through the bot route, so one chat keeps one screen (#1146).
