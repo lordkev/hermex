@@ -693,6 +693,29 @@ final class PushRegistrationTests: XCTestCase {
         XCTAssertFalse(try harness.registrar.sharesRegistration(for: URL(string: "https://unpaired.example.com")!))
     }
 
+    /// An entry for the host still registering its device shares the pairing before its keys
+    /// are saved (#1178): turning the other entry off while it registers must leave the host
+    /// plugin on, so the new entry ends paired and notified.
+    func testAnEntryStillPairingSharesTheHostWithTheOneTurningOff() async throws {
+        let harness = Harness()
+        harness.store.pairings[serverA] = harness.pairing(install: installA, registeredToken: "0a1b")
+        harness.deliverTokenOnRegister("0a1b")
+        var sharedWhileRegistering: Bool?
+        harness.relay.duringRegister = {
+            sharedWhileRegistering = try? harness.registrar.sharesRegistration(for: self.serverA)
+        }
+
+        try await harness.registrar.enable(harness.pairing(install: installA), for: serverB)
+        try await harness.registrar.disable(for: serverA)
+
+        XCTAssertEqual(sharedWhileRegistering, true, "A disable then would have turned the host plugin off")
+        XCTAssertEqual(harness.store.pairings[serverB]?.registeredToken, "0a1b")
+        XCTAssertEqual(harness.store.pairings[serverB]?.effectivePreferences.replies, true)
+        XCTAssertNil(harness.store.pairings[serverA])
+        XCTAssertEqual(harness.relay.deletions, [], "The device the new entry holds stays registered")
+        XCTAssertFalse(try harness.registrar.sharesRegistration(for: serverB), "Nothing is in flight once it is saved")
+    }
+
     /// Without stored keys nothing could ever revoke the device, so a Keychain
     /// write that fails takes the relay registration down with it.
     func testEnableUndoesTheRelayRegistrationWhenTheKeychainWriteFails() async {

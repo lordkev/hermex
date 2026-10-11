@@ -81,8 +81,9 @@ enum PushRegistrarError: Error, Equatable {
     // must never replace a newly accepted choice with an older snapshot, and a teardown
     // judges which entries hold a token only once no write to them is in flight (#1178).
     private var registrationTail: Task<Void, Never>?
-    /// Servers whose enable has a device token and is writing (or waiting to write) it.
-    private var enablesInFlight: [URL] = []
+    /// Enables that have a device token and are writing (or waiting to write) it: the server
+    /// each pairs and the pairing it will save.
+    private var enablesInFlight: [(server: URL, pairing: PushPairing)] = []
     private var currentToken: String?
     private var pendingLaunchRefresh = false
     private var tokenWaiters: [CheckedContinuation<String, any Error>] = []
@@ -129,8 +130,12 @@ enum PushRegistrarError: Error, Equatable {
         guard await authorization.requestAuthorization() else { throw PushRegistrarError.permissionDenied }
 
         let token = try await deviceToken()
-        enablesInFlight.append(server)
-        defer { if let index = enablesInFlight.firstIndex(of: server) { enablesInFlight.remove(at: index) } }
+        enablesInFlight.append((server, pairing))
+        defer {
+            if let index = enablesInFlight.firstIndex(where: { $0.server == server && $0.pairing == pairing }) {
+                enablesInFlight.remove(at: index)
+            }
+        }
         try await enqueueRegistrationWork { [self] in
             try await relay.registerDevice(token: token, identity: identity, pairing: pairing)
 
@@ -159,7 +164,7 @@ enum PushRegistrarError: Error, Equatable {
         // An entry that never paired has no device to judge, so its removal doesn't wait
         // for other servers' relay calls. One whose enable is queued or whose keys can't be
         // read takes the queue like any other.
-        if !enablesInFlight.contains(server), case .success(nil) = Result(catching: { try store.pairing(for: server) }) {
+        if !enablesInFlight.contains(where: { $0.server == server }), case .success(nil) = Result(catching: { try store.pairing(for: server) }) {
             await activities.forget(server: server)
             return
         }
@@ -202,11 +207,14 @@ enum PushRegistrarError: Error, Equatable {
         try? store.pairing(for: server)
     }
 
-    /// Whether another entry for this server's host is paired too, so turning this one off
-    /// must leave the host sending for it. Throws when the Keychain can't list the entries.
+    /// Whether another entry for this server's host is paired too, or is registering its
+    /// device to pair, so turning this one off must leave the host sending for it. Throws when
+    /// the Keychain can't list the entries.
     func sharesRegistration(for server: URL) throws -> Bool {
         guard let pairing = pairing(for: server) else { return false }
-        return try !entries(sharing: pairing, besides: server).isEmpty
+        return try enablesInFlight.contains {
+            $0.server != server && $0.pairing.installKey == pairing.installKey && $0.pairing.relayURL == pairing.relayURL
+        } || !entries(sharing: pairing, besides: server).isEmpty
     }
 
     /// The other configured servers that pair with the same install at the same relay

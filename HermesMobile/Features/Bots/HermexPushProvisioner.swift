@@ -401,8 +401,8 @@ import UserNotifications
             if let connection, try registrar?.sharesRegistration(for: server) != true {
                 let client = dashboard(connection)
                 do { try await client.signIn() } catch { return failSignIn(error) }
-                // Another entry can finish pairing during a sign-in; it then owns the
-                // plugin too, so the disable doesn't go out.
+                // Another entry can start registering its device or finish pairing during
+                // a sign-in; it then owns the plugin too, so the disable doesn't go out.
                 do {
                     try await client.setPlugin(HermexPushPlugin.name, enabled: false) {
                         if try self.registrar?.sharesRegistration(for: self.server) == true { throw HostPairingShared() }

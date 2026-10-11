@@ -87,6 +87,6 @@ deciding, so they judge the tokens the entries end up holding; removing an entry
 that never paired doesn't wait. Another entry keeps only the token it
 holds, and a Keychain that can't list the entries deletes nothing (turning off
 fails instead). Turning one off in Settings also leaves the
-host's plugin enabled; only the last one disables it
-(`HermexPushProvisioner.disable`). Their preferences are that one
+host's plugin enabled while another entry is paired or still registering its
+device; only the last one disables it (`HermexPushProvisioner.disable`). Their preferences are that one
 registration too, so the last choice saved under either entry applies to both.
