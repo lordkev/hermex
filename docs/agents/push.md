@@ -81,5 +81,8 @@ picks the route: a webui server's Bot connection or a Hermes server's session
 server, even while a Hermes alias is active. The relay keys a device by install
 and token, so both entries share one registration: removing or turning off one
 keeps it for the other, and only the last one deletes it
-(`PushRegistrar.forget` and `disable`, #1178). Their preferences are that one
+(`PushRegistrar.forget` and `disable`, #1178), including a removal that lands
+while a device write is in flight. Turning one off in Settings also leaves the
+host's plugin enabled; only the last one disables it
+(`HermexPushProvisioner.disable`). Their preferences are that one
 registration too, so the last choice saved under either entry applies to both.
