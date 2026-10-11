@@ -10945,7 +10945,9 @@ final class ChatViewModelSendTests: XCTestCase {
             streamClient: resolvedStreamClient,
             approvalStreamClient: approvalStreamClient ?? SpySSEStreamingClient(),
             clarifyStreamClient: clarifyStreamClient ?? SpySSEStreamingClient(),
-            liveActivityManager: liveActivityManager,
+            // Default to a spy so unit tests never drive ActivityKit, whose synchronous reads
+            // can hold the main actor for seconds and starve a test's waits.
+            liveActivityManager: liveActivityManager ?? SpyChatLiveActivityManager(),
             pollingIntervals: pollingIntervals,
             steeringConfirmationDismissDelay: steeringConfirmationDismissDelay,
             streamingScrollCoalescingDelayNanoseconds: streamingScrollCoalescingDelayNanoseconds,
