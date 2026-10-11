@@ -58,7 +58,7 @@ enum HermesSessionLinkOutcome: Equatable {
 /// only a key exactly one of them has opens. The host answers an unknown key with the one session
 /// it prefixes, so a row whose `id` isn't the link's key is no match. Any failed read fails the
 /// lookup: a Profile that couldn't be read leaves the link unproven. A subagent's link
-/// (`opensParent`) opens the found session's parent instead.
+/// (`opensParent`) opens the session that delegated to the found one instead.
 @MainActor enum HermesSessionLookup {
     enum Outcome: Equatable {
         /// The session as the Sessions list shows its row, which it opens the way that row does.
@@ -98,11 +98,21 @@ enum HermesSessionLinkOutcome: Equatable {
         }
         guard var hit = hits.first else { return .gone }
         guard hits.count == 1 else { return .ambiguous }
-        // A subagent's push names the child; the user follows the session that delegated to it,
-        // one hop up in the child's Profile (#1177). A child naming no parent opens itself.
-        if destination.opensParent, let parent = hit.row["parent_session_id"].text, !parent.isEmpty {
-            guard let row = try await exactRow(parent, profile: hit.profile, on: wire) else { return .gone }
-            hit.row = row
+        // A subagent's push names the child; the user follows the session that delegated to it
+        // (#1177): one hop up from the subagent's first segment, in the child's Profile, since a
+        // subagent that compressed pushes from its newest. Every segment inherits the
+        // `_delegate_from` `delegate_task` stamps, so the climb stops there even when the delegator
+        // compressed too; a host without the mark climbs compression alone. A child naming no
+        // parent opens itself.
+        if destination.opensParent {
+            let delegator = hit.row.modelConfigText("_delegate_from")
+            guard let first = try await lineageRoot(of: hit.row, profile: hit.profile, on: wire, where: {
+                $0.modelConfigText("_delegate_from") == delegator
+            }) else { return .gone }
+            if let parent = first["parent_session_id"].text, !parent.isEmpty {
+                guard let row = try await exactRow(parent, profile: hit.profile, on: wire) else { return .gone }
+                hit.row = row
+            }
         }
         let row = try await listRow(hit.row, profile: hit.profile, on: wire)
         return row.isRoomSession ? .room : .found(row.summary(in: hit.profile))
@@ -125,14 +135,16 @@ enum HermesSessionLinkOutcome: Equatable {
     }
 
     /// The root of `found`'s legacy compression chain, reached by stepping up while the parent
-    /// ended in compression; `found` itself when it has none. Nil when the root is more than
-    /// `lineageHopLimit` parents up (or the chain cycles): the walk can't prove which row it is.
-    private static func lineageRoot(of found: BotJSON, profile: String, on wire: any BotTransport) async throws -> BotJSON? {
+    /// ended in compression and `belongs` accepts it; `found` itself when it has none. Nil when
+    /// the root is more than `lineageHopLimit` parents up (or the chain cycles): the walk can't
+    /// prove which row it is.
+    private static func lineageRoot(of found: BotJSON, profile: String, on wire: any BotTransport,
+                                    where belongs: (BotJSON) -> Bool = { _ in true }) async throws -> BotJSON? {
         var top = found
         var hops = 0
         while let parent = top["parent_session_id"].text, !parent.isEmpty,
               let row = try await exactRow(parent, profile: profile, on: wire),
-              row["end_reason"].text == "compression" {
+              row["end_reason"].text == "compression", belongs(row) {
             guard hops < lineageHopLimit else { return nil }
             top = row
             hops += 1
