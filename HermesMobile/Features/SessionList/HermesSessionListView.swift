@@ -246,8 +246,8 @@ struct HermesSessionListView: View {
         // what it opens or says shows here.
         .onChange(of: pendingLink, initial: true) { covers.accept(pendingLink, on: entry.server) }
         .task(id: pendingLink) { await openPendingLink() }
-        // Opens once the list knows New Session's Profile and the host answers, as New Session does.
-        .onChange(of: NewChatReadiness(request: pendingNewChat, profile: profile, isOffline: viewModel.isViewingCachedData),
+        // Opens once the list has read the host live, whichever Profile the request names.
+        .onChange(of: NewChatReadiness(request: pendingNewChat, profile: profile, isLive: viewModel.isHermesLive),
                   initial: true) { openPendingNewChat() }
         .onDisappear {
             actionToast.dismiss()
@@ -533,7 +533,7 @@ struct HermesSessionListView: View {
 
     /// Opens the new session a Shortcut asked for (#1180) over whatever covers the rows.
     private func openPendingNewChat() {
-        guard let chat = pendingNewChat?.chat(on: entry, listed: profile, isOffline: viewModel.isViewingCachedData) else {
+        guard let chat = pendingNewChat?.chat(on: entry, listed: profile, isLive: viewModel.isHermesLive) else {
             return
         }
         pendingNewChat = nil
@@ -606,11 +606,12 @@ struct HermesSessionListView: View {
     }
 }
 
-/// What a Shortcut's new session waits on: its request, New Session's Profile, and the host.
+/// What a Shortcut's new session waits on: its request, New Session's Profile, and the list's
+/// live read of the host.
 private struct NewChatReadiness: Equatable {
     let request: HermesNewChatDestination?
     let profile: String?
-    let isOffline: Bool
+    let isLive: Bool
 }
 
 /// What a search runs against: a new query, Profile or All Profiles cancels the one in flight.

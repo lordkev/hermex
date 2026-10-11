@@ -198,10 +198,10 @@ struct HermesNewChatDestination: Hashable {
     }
 
     /// The chat `entry`'s Sessions list opens: in this request's Profile, else `listed`, the one
-    /// its New Session uses. Nil for another server's list, and while the list waits, for that
-    /// Profile or, while it shows the offline cache, for the host, as New Session does.
-    @MainActor func chat(on entry: HermesSessionListEntry, listed: String?, isOffline: Bool) -> HermesSessionChat? {
-        guard entry.server == server, !isOffline, let profile = profile ?? listed else { return nil }
+    /// its New Session uses. Nil for another server's list, and until the list `isLive`, having
+    /// read the host and showing no offline cache, whatever Profile the request names.
+    @MainActor func chat(on entry: HermesSessionListEntry, listed: String?, isLive: Bool) -> HermesSessionChat? {
+        guard entry.server == server, isLive, let profile = profile ?? listed else { return nil }
         return HermesSessionChat(server: server, connection: entry.connection, target: .new(profile: profile),
                                  autoStartsVoiceInput: autoStartsVoiceInput)
     }

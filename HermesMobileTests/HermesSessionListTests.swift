@@ -450,6 +450,28 @@ import Observation
         XCTAssertEqual(list.visibleSessions(searchText: "nimbus", selectedProjectID: nil).compactMap(\.sessionId), ["far"])
     }
 
+    // MARK: Shortcuts
+
+    /// A Shortcut's new chat that names its Profile still waits for the list's first live read
+    /// (#1180): on a cold launch the list hasn't reached the host yet, and it may not.
+    func testANamedProfilesNewChatWaitsForTheListsFirstLiveRead() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: page([HermesSessionRow(id: "a")])]
+        let list = makeList(wire)
+        let entry = HermesSessionListEntry(server: server, connection: connection, profile: "default")
+        let request = HermesNewChatDestination(server: server, profile: "research")
+        let chat = { request.chat(on: entry, listed: list.hermesProfile, isLive: list.isHermesLive) }
+
+        XCTAssertNil(chat(), "Held on a cold launch, before the list reads the host")
+        wire.connectFailure = BotFailure.transport
+        await list.openHermes()
+        XCTAssertNil(chat(), "Held while the host can't be reached")
+
+        wire.connectFailure = nil
+        await list.openHermes()
+        XCTAssertEqual(chat()?.target, .new(profile: "research"))
+    }
+
     // MARK: Fixture
 
     private func makeList(_ wire: HermesSessionListWire, profile: String? = "default",

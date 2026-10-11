@@ -1678,8 +1678,9 @@ route, so a Shortcut saved before #1180 opens as it did (#971); every bare id re
 `PendingLinks.hermesNewChat` routes from the registry and auth state as a session link does: a
 removed server drops it, another active server is switched away from, a signed-out server holds it
 for sign-in. The home turns to Sessions and the list opens `.new(profile:)` over whatever covers
-its rows, in the Shortcut's Profile or the one New Session uses, once the list has settled that
-Profile and while the host answers (New Session is off offline). The voice variant starts
+its rows, in the Shortcut's Profile or the one New Session uses, once the list has read the host
+live (`SessionListViewModel.isHermesLive`), even when the Shortcut names its Profile, and never
+from the offline cache (New Session is off offline). The voice variant starts
 dictation (`HermesSessionChat.autoStartsVoiceInput`). A Profile is a bot: it is listed once and
 opens a new session, never its Bot Chat.
 

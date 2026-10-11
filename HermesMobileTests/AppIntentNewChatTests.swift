@@ -199,17 +199,17 @@ final class AppIntentNewChatTests: XCTestCase {
         let entry = HermesSessionListEntry(server: studio, connection: connection, profile: nil)
         let voice = HermesNewChatDestination(server: studio, profile: nil, autoStartsVoiceInput: true)
 
-        XCTAssertNil(voice.chat(on: entry, listed: nil, isOffline: false), "Waits for New Session's Profile")
-        XCTAssertNil(voice.chat(on: entry, listed: "default", isOffline: true), "Waits for the host, as New Session does")
-        let opened = voice.chat(on: entry, listed: "default", isOffline: false)
+        XCTAssertNil(voice.chat(on: entry, listed: nil, isLive: true), "Waits for New Session's Profile")
+        XCTAssertNil(voice.chat(on: entry, listed: "default", isLive: false), "Waits for the host, as New Session does")
+        let opened = voice.chat(on: entry, listed: "default", isLive: true)
         XCTAssertEqual(opened?.target, .new(profile: "default"))
         XCTAssertEqual(opened?.server, studio)
         XCTAssertEqual(opened?.autoStartsVoiceInput, true)
 
-        let named = HermesNewChatDestination(server: studio, profile: "dev").chat(on: entry, listed: "default", isOffline: false)
+        let named = HermesNewChatDestination(server: studio, profile: "dev").chat(on: entry, listed: "default", isLive: true)
         XCTAssertEqual(named?.target, .new(profile: "dev"), "The Shortcut's Profile wins over the list's")
         XCTAssertEqual(named?.autoStartsVoiceInput, false)
-        XCTAssertNil(HermesNewChatDestination(server: hermes, profile: "dev").chat(on: entry, listed: "default", isOffline: false),
+        XCTAssertNil(HermesNewChatDestination(server: hermes, profile: "dev").chat(on: entry, listed: "default", isLive: true),
                      "Another server's list opens nothing")
     }
 }
