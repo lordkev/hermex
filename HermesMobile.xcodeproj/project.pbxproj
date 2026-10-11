@@ -155,6 +155,7 @@
 		C04900000000000000000001 /* ChatComposerTextInputView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04900000000000000000002 /* ChatComposerTextInputView.swift */; };
 		C04900000000000000000003 /* ChatComposerVoiceControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04900000000000000000004 /* ChatComposerVoiceControls.swift */; };
 		C04700000000000000000001 /* ChatPendingActionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04700000000000000000002 /* ChatPendingActionCoordinator.swift */; };
+		C12080000000000000000001 /* ChatSessionChannelCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C12080000000000000000002 /* ChatSessionChannelCoordinator.swift */; };
 		C04800000000000000000001 /* ChatAttachmentCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04800000000000000000002 /* ChatAttachmentCoordinator.swift */; };
 		C04800000000000000000003 /* ChatAttachmentCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04800000000000000000004 /* ChatAttachmentCoordinatorTests.swift */; };
 		C0GATE000000000000000001 /* ChatComposerSendGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0GATE000000000000000002 /* ChatComposerSendGateTests.swift */; };
@@ -190,6 +191,7 @@
 		E1015000000000000000A003 /* HermesChatSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1015000000000000000A004 /* HermesChatSettings.swift */; };
 		E1013000000000000000A005 /* HermesBtwPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1013000000000000000A006 /* HermesBtwPanel.swift */; };
 		C04600000000000000000003 /* ChatStreamCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04600000000000000000004 /* ChatStreamCoordinatorTests.swift */; };
+		C12080000000000000000003 /* ChatSessionChannelCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C12080000000000000000004 /* ChatSessionChannelCoordinatorTests.swift */; };
 		E1010000000000000000A003 /* HermesChatTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1010000000000000000A004 /* HermesChatTurnTests.swift */; };
 		E1047000000000000000A003 /* HermesTranscriptPagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1047000000000000000A004 /* HermesTranscriptPagingTests.swift */; };
 		E1054000000000000000A003 /* HermesOfflineCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1054000000000000000A004 /* HermesOfflineCacheTests.swift */; };
@@ -804,6 +806,7 @@
 		C04900000000000000000002 /* ChatComposerTextInputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatComposerTextInputView.swift; sourceTree = "<group>"; };
 		C04900000000000000000004 /* ChatComposerVoiceControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatComposerVoiceControls.swift; sourceTree = "<group>"; };
 		C04700000000000000000002 /* ChatPendingActionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPendingActionCoordinator.swift; sourceTree = "<group>"; };
+		C12080000000000000000002 /* ChatSessionChannelCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionChannelCoordinator.swift; sourceTree = "<group>"; };
 		C04800000000000000000002 /* ChatAttachmentCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatAttachmentCoordinator.swift; sourceTree = "<group>"; };
 		C04800000000000000000004 /* ChatAttachmentCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatAttachmentCoordinatorTests.swift; sourceTree = "<group>"; };
 		C0GATE000000000000000002 /* ChatComposerSendGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatComposerSendGateTests.swift; sourceTree = "<group>"; };
@@ -833,6 +836,7 @@
 		A02400000000000000000002 /* Goal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Goal.swift; sourceTree = "<group>"; };
 		C04600000000000000000002 /* ChatStreamCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStreamCoordinator.swift; sourceTree = "<group>"; };
 		C04600000000000000000004 /* ChatStreamCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStreamCoordinatorTests.swift; sourceTree = "<group>"; };
+		C12080000000000000000004 /* ChatSessionChannelCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionChannelCoordinatorTests.swift; sourceTree = "<group>"; };
 		E1010000000000000000A002 /* HermesChatTurnCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatTurnCoordinator.swift; sourceTree = "<group>"; };
 		E1047000000000000000A002 /* HermesTranscriptHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesTranscriptHistory.swift; sourceTree = "<group>"; };
 		E1010000000000000000A004 /* HermesChatTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatTurnTests.swift; sourceTree = "<group>"; };
@@ -1457,6 +1461,7 @@
 				C03251000000000000F106 /* ComposerVoiceInputServerRecordingTests.swift */,
 					C04100000000000000000004 /* ChatComposerConfigLoaderTests.swift */,
 					C04600000000000000000004 /* ChatStreamCoordinatorTests.swift */,
+					C12080000000000000000004 /* ChatSessionChannelCoordinatorTests.swift */,
 					E1010000000000000000A004 /* HermesChatTurnTests.swift */,
 					E1047000000000000000A004 /* HermesTranscriptPagingTests.swift */,
 					E1054000000000000000A004 /* HermesOfflineCacheTests.swift */,
@@ -1940,6 +1945,7 @@
 					E1015000000000000000A004 /* HermesChatSettings.swift */,
 					E1013000000000000000A006 /* HermesBtwPanel.swift */,
 					C04700000000000000000002 /* ChatPendingActionCoordinator.swift */,
+					C12080000000000000000002 /* ChatSessionChannelCoordinator.swift */,
 					C04800000000000000000002 /* ChatAttachmentCoordinator.swift */,
 					1A2B3C4D5E6F7000000000D5 /* ChatViewModel.swift */,
 				A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */,
@@ -2722,6 +2728,7 @@
 					E1015000000000000000A003 /* HermesChatSettings.swift in Sources */,
 					E1013000000000000000A005 /* HermesBtwPanel.swift in Sources */,
 					C04700000000000000000001 /* ChatPendingActionCoordinator.swift in Sources */,
+					C12080000000000000000001 /* ChatSessionChannelCoordinator.swift in Sources */,
 					C04800000000000000000001 /* ChatAttachmentCoordinator.swift in Sources */,
 					1A2B3C4D5E6F7000000000D4 /* ChatViewModel.swift in Sources */,
 				1A2B3C4D5E6F7000000000D6 /* SSEClient.swift in Sources */,
@@ -2871,6 +2878,7 @@
 				C03251000000000000B106 /* ComposerVoiceInputServerRecordingTests.swift in Sources */,
 					C04100000000000000000003 /* ChatComposerConfigLoaderTests.swift in Sources */,
 					C04600000000000000000003 /* ChatStreamCoordinatorTests.swift in Sources */,
+					C12080000000000000000003 /* ChatSessionChannelCoordinatorTests.swift in Sources */,
 					E1010000000000000000A003 /* HermesChatTurnTests.swift in Sources */,
 					E1047000000000000000A003 /* HermesTranscriptPagingTests.swift in Sources */,
 					E1054000000000000000A003 /* HermesOfflineCacheTests.swift in Sources */,

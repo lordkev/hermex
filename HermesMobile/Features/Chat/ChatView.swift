@@ -273,6 +273,7 @@ struct ChatView: View {
     @AppStorage(StreamingSendBehavior.storageKey) private var streamingSendBehaviorRawValue = StreamingSendBehavior.steer.rawValue
     @AppStorage(ResponseCompletionNotifications.isEnabledKey) private var isResponseCompletionNotificationsEnabled = false
     @AppStorage(AgentRunLiveActivityPrivacy.showsResponseExcerptsKey) private var showsLiveActivityResponseExcerpts = false
+    @AppStorage(ChatSessionChannelPreference.liveSessionUpdatesKey) private var isLiveSessionUpdatesEnabled = true
     @AppStorage(ChatTranscriptDisplaySettings.showsThinkingAndToolCardsKey) private var showsThinkingAndToolCards = true
     @AppStorage(ChatTranscriptDisplaySettings.foldsSettledTurnsKey) private var foldsSettledTurns = true
     @AppStorage(ChatTranscriptDisplaySettings.rtlChatLayoutEnabledKey) private var rtlChatLayoutEnabled = ChatTranscriptDisplaySettings.rtlChatLayoutDefaultEnabled
@@ -1016,6 +1017,9 @@ struct ChatView: View {
                     onSettingsChange: syncDraftSettings
                 )
             )
+            .onChange(of: isLiveSessionUpdatesEnabled) {
+                viewModel.setLiveSessionUpdatesEnabled(isLiveSessionUpdatesEnabled)
+            }
             .onChange(of: showsLiveActivityResponseExcerpts) {
                 viewModel.setShowsLiveActivityResponseExcerpts(showsLiveActivityResponseExcerpts)
             }

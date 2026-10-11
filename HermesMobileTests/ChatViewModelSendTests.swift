@@ -10907,6 +10907,7 @@ final class ChatViewModelSendTests: XCTestCase {
         streamClient: SSEStreamingClient? = nil,
         approvalStreamClient: SSEStreamingClient? = nil,
         clarifyStreamClient: SSEStreamingClient? = nil,
+        sessionStreamClient: SSEStreamingClient? = nil,
         sessionSummary: SessionSummary? = nil,
         liveActivityManager: (any AgentLiveActivityManaging)? = nil,
         pollingIntervals: ChatPollingIntervals = .standard,
@@ -10945,6 +10946,7 @@ final class ChatViewModelSendTests: XCTestCase {
             streamClient: resolvedStreamClient,
             approvalStreamClient: approvalStreamClient ?? SpySSEStreamingClient(),
             clarifyStreamClient: clarifyStreamClient ?? SpySSEStreamingClient(),
+            sessionStreamClient: sessionStreamClient ?? SpySSEStreamingClient(),
             // Default to a spy so unit tests never drive ActivityKit, whose synchronous reads
             // can hold the main actor for seconds and starve a test's waits.
             liveActivityManager: liveActivityManager ?? SpyChatLiveActivityManager(),

@@ -201,7 +201,26 @@ struct SessionStatusResponse: Decodable, Equatable {
     let activeStreamId: String?
     let isStreaming: Bool?
     let pendingUserMessage: String?
+    /// Persisted message count; the session channel's fallback poller compares
+    /// it with the transcript on screen (#1208). Absent on older servers.
+    let messageCount: Int?
     let error: String?
+
+    init(
+        sessionId: String? = nil,
+        activeStreamId: String? = nil,
+        isStreaming: Bool? = nil,
+        pendingUserMessage: String? = nil,
+        messageCount: Int? = nil,
+        error: String? = nil
+    ) {
+        self.sessionId = sessionId
+        self.activeStreamId = activeStreamId
+        self.isStreaming = isStreaming
+        self.pendingUserMessage = pendingUserMessage
+        self.messageCount = messageCount
+        self.error = error
+    }
 }
 
 struct SessionSummary: Decodable, Equatable, Hashable, Identifiable {

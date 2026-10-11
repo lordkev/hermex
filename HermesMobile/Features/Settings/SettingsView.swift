@@ -75,6 +75,7 @@ struct SettingsView: View {
     @AppStorage(AppHaptics.streamingPulseIsEnabledKey) private var isStreamingPulseEnabled = false
     @AppStorage(ResponseCompletionNotifications.isEnabledKey) private var isResponseCompletionNotificationsEnabled = false
     @AppStorage(AgentRunLiveActivityPrivacy.showsResponseExcerptsKey) private var showsLiveActivityResponseExcerpts = false
+    @AppStorage(ChatSessionChannelPreference.liveSessionUpdatesKey) private var isLiveSessionUpdatesEnabled = true
     @AppStorage(SessionRowDisplaySettings.showMessageCountKey) private var showsSessionMessageCount = true
     @AppStorage(SessionRowDisplaySettings.showWorkspaceKey) private var showsSessionWorkspace = true
     @AppStorage(SessionRowDisplaySettings.showCronSessionsKey) private var showsCronSessions = true
@@ -184,6 +185,16 @@ struct SettingsView: View {
                 }
 
                 SettingsCard(title: String(localized: "Interaction")) {
+                    SettingsToggleRow(
+                        title: String(localized: "Live Session Updates"),
+                        systemImage: "arrow.triangle.2.circlepath",
+                        isOn: $isLiveSessionUpdatesEnabled
+                    )
+
+                    SettingsFootnote(String(localized: "Shows replies the agent starts on its own — finished background jobs, scheduled tasks — while a chat is open and idle."))
+
+                    SettingsDivider()
+
                     SettingsToggleRow(
                         title: String(localized: "Haptic Feedback"),
                         systemImage: "iphone.radiowaves.left.and.right",

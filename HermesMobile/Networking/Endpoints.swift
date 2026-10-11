@@ -42,6 +42,9 @@ enum Endpoint {
     case submitGoal
     case approvalPending(sessionID: String)
     case approvalStream(sessionID: String)
+    /// The persistent per-session channel (#1208): `server_turn_started`,
+    /// `session-updated`, `bg_task_complete` while no turn of this client's own runs.
+    case sessionStream(sessionID: String, knownCount: Int)
     case approvalRespond
     case clarifyPending(sessionID: String)
     case clarifyStream(sessionID: String)
@@ -220,6 +223,8 @@ enum Endpoint {
             return "/api/approval/pending"
         case .approvalStream:
             return "/api/approval/stream"
+        case .sessionStream:
+            return "/api/session/stream"
         case .approvalRespond:
             return "/api/approval/respond"
         case .clarifyPending:
@@ -474,6 +479,11 @@ enum Endpoint {
             let .clarifyPending(sessionID),
             let .clarifyStream(sessionID):
             return [URLQueryItem(name: "session_id", value: sessionID)]
+        case let .sessionStream(sessionID, knownCount):
+            return [
+                URLQueryItem(name: "session_id", value: sessionID),
+                URLQueryItem(name: "known_count", value: String(max(0, knownCount)))
+            ]
         case let .backgroundStatus(sessionID):
             return [URLQueryItem(name: "session_id", value: sessionID)]
         case let .directoryList(sessionID, path):

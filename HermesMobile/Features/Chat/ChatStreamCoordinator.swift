@@ -822,7 +822,7 @@ final class ChatStreamCoordinator {
             case .done:
                 // Duplicate done after completion — already finalized; ignore.
                 return
-            case .heartbeat, .ignored:
+            case .heartbeat, .ignored, .serverTurnStarted, .sessionUpdated:
                 break
             case .transportError, .cancelled, .error, .streamEnd:
                 // Settled completion wins: tear down exactly once without
@@ -923,7 +923,8 @@ final class ChatStreamCoordinator {
             if recoveryState == .checking {
                 setRecoveryStateIfChanged(.idle)
             }
-        case .ignored:
+        case .ignored, .serverTurnStarted, .sessionUpdated:
+            // Session-channel events never arrive on chat/stream; nothing to do.
             break
         }
     }

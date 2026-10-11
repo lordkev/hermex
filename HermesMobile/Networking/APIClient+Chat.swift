@@ -55,6 +55,10 @@ extension APIClient {
         Endpoint.approvalStream(sessionID: sessionID).url(relativeTo: baseURL)
     }
 
+    nonisolated func sessionStreamURL(sessionID: String, knownCount: Int) -> URL {
+        Endpoint.sessionStream(sessionID: sessionID, knownCount: knownCount).url(relativeTo: baseURL)
+    }
+
     func respondApproval(
         sessionID: String,
         choice: ApprovalChoice,

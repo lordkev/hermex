@@ -587,6 +587,8 @@ final class ChatViewModel {
     private let hermesTurn: HermesChatTurnCoordinator?
     private let drafts: ChatDraftStore
     private let pendingActionCoordinator: ChatPendingActionCoordinator
+    /// Keeps an idle chat in step with server-initiated turns (#1208).
+    let sessionChannelCoordinator: ChatSessionChannelCoordinator
     private let attachmentCoordinator: ChatAttachmentCoordinator
     private let btwStreamClient: SSEStreamingClient
     private let liveActivityManager: any AgentLiveActivityManaging
@@ -691,6 +693,8 @@ final class ChatViewModel {
         streamClient: SSEStreamingClient? = nil,
         approvalStreamClient: SSEStreamingClient? = nil,
         clarifyStreamClient: SSEStreamingClient? = nil,
+        sessionStreamClient: SSEStreamingClient? = nil,
+        liveSessionUpdatesEnabled: Bool = ChatSessionChannelPreference.isEnabled(),
         btwStreamClient: SSEStreamingClient? = nil,
         liveActivityManager: (any AgentLiveActivityManaging)? = nil,
         showsLiveActivityResponseExcerpts: Bool = false,
@@ -751,6 +755,11 @@ final class ChatViewModel {
             clarifyStreamClient: clarifyStreamClient ?? SSEClient(),
             pollingIntervals: pollingIntervals
         )
+        self.sessionChannelCoordinator = ChatSessionChannelCoordinator(
+            client: resolvedClient,
+            streamClient: sessionStreamClient ?? SSEClient(),
+            isEnabled: liveSessionUpdatesEnabled
+        )
         self.attachmentCoordinator = ChatAttachmentCoordinator(
             client: resolvedClient,
             draftAttachmentStore: draftAttachmentStore,
@@ -775,6 +784,7 @@ final class ChatViewModel {
         displayTitle = Self.displayTitle(from: session.title)
         turn.attach(delegate: self)
         self.pendingActionCoordinator.delegate = self
+        self.sessionChannelCoordinator.delegate = self
         self.attachmentCoordinator.delegate = self
     }
 
@@ -1915,6 +1925,9 @@ final class ChatViewModel {
             )
             responseCompletionNeedsTranscriptRefresh = false
             isViewingCachedData = false
+            // The transcript is current: open (or keep) the per-session channel so
+            // a turn this client did not start is seen (#1208). No-op mid-turn.
+            sessionChannelCoordinator.startMonitoringIfIdle()
             contextWindowSnapshot = ContextWindowSnapshot(
                 contextLength: session?.contextLength,
                 thresholdTokens: session?.thresholdTokens,
@@ -6133,6 +6146,7 @@ final class ChatViewModel {
     }
 
     func cleanupPollingTasks() {
+        sessionChannelCoordinator.stopMonitoring()
         stopBackgroundPolling(clearTrackedPrompts: true)
         pendingActionCoordinator.stopMonitoring(clearPrompt: true)
         takeInitialSessionPrefetch(usable: false)
@@ -6323,7 +6337,8 @@ final class ChatViewModel {
             activeBtwAnswer = "Error: \(message)"
             updateActiveBtwMessage(isLoading: false)
             finishBtwStream()
-        case .heartbeat, .ignored, .reasoning, .toolStarted, .toolCompleted, .title, .metering, .pendingSteerLeftover:
+        case .heartbeat, .ignored, .reasoning, .toolStarted, .toolCompleted, .title, .metering, .pendingSteerLeftover,
+             .serverTurnStarted, .sessionUpdated:
             break
         }
     }
@@ -7563,6 +7578,26 @@ extension ChatViewModel: ChatPendingActionCoordinatorDelegate {
     }
 }
 
+extension ChatViewModel: ChatSessionChannelCoordinatorDelegate {
+    var sessionChannelSessionID: String? { hermesTurn == nil ? sessionID : nil }
+    var sessionChannelHasActiveStream: Bool { activeStreamID != nil }
+    var sessionChannelKnownMessageCount: Int { messagesOffset + messages.count }
+
+    /// A reload is the whole reaction: `loadMessages` reads the session's
+    /// `active_stream_id` and `reconcileSessionLoad` attaches to it exactly as a
+    /// chat that opens mid-turn does, so a `server_turn_started` streams live and
+    /// a `session-updated` pulls the finished turn.
+    func sessionChannelDidDetectServerChange(reason: ChatSessionChannelChangeReason) async {
+        guard activeStreamID == nil else { return }
+        await loadMessages()
+        await reconnectStreamIfNeeded()
+    }
+
+    func setLiveSessionUpdatesEnabled(_ enabled: Bool) {
+        sessionChannelCoordinator.setEnabled(enabled)
+    }
+}
+
 extension ChatViewModel: ChatAttachmentCoordinatorDelegate {
     var attachmentSessionID: String? { sessionID }
     var attachmentIsViewingCachedData: Bool { isViewingCachedData }
@@ -7606,6 +7641,7 @@ extension ChatViewModel: ChatStreamCoordinatorDelegate {
 
     func streamCoordinatorStartAuxiliaryMonitoring() {
         pendingActionCoordinator.startMonitoring()
+        sessionChannelCoordinator.stopMonitoring()
     }
 
     func streamCoordinatorStopAuxiliaryMonitoring(clearPrompt: Bool) {
@@ -7646,6 +7682,7 @@ extension ChatViewModel: ChatStreamCoordinatorDelegate {
 
     func streamCoordinatorDidFinishStream() {
         flushPendingStreamingContent()
+        sessionChannelCoordinator.startMonitoringIfIdle()
         dismissSteeringConfirmation()
         clearSteerFailure()
         responseCompletionNeedsTranscriptRefresh = false

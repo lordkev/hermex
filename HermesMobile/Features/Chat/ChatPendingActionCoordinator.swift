@@ -339,7 +339,7 @@ final class ChatPendingActionCoordinator {
         case .transportError, .error:
             startApprovalFallbackPolling(sessionID: sessionID)
         case .token, .interimAssistant, .reasoning, .toolStarted, .toolCompleted, .title, .metering, .done, .clarificationPending,
-             .pendingSteerLeftover, .streamEnd, .cancelled, .heartbeat, .ignored:
+             .pendingSteerLeftover, .streamEnd, .cancelled, .heartbeat, .serverTurnStarted, .sessionUpdated, .ignored:
             break
         }
     }
@@ -450,7 +450,7 @@ final class ChatPendingActionCoordinator {
         case .transportError, .error:
             startClarificationFallbackPolling(sessionID: sessionID)
         case .token, .interimAssistant, .reasoning, .toolStarted, .toolCompleted, .title, .metering, .done,
-             .pendingSteerLeftover, .streamEnd, .cancelled, .heartbeat, .ignored:
+             .pendingSteerLeftover, .streamEnd, .cancelled, .heartbeat, .serverTurnStarted, .sessionUpdated, .ignored:
             break
         }
     }

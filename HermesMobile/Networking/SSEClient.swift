@@ -90,7 +90,49 @@ enum SSEEvent: Equatable {
     case error(String)
     case transportError(String)
     case heartbeat
+    /// Session channel: a turn this client did not start is running.
+    case serverTurnStarted(ServerTurnStartedEvent)
+    /// Session channel: the server holds more messages than the subscriber reported.
+    case sessionUpdated(SessionUpdatedEvent)
     case ignored
+}
+
+/// `server_turn_started` on `/api/session/stream` (#1208).
+struct ServerTurnStartedEvent: Decodable, Equatable {
+    let sessionId: String?
+    let streamId: String?
+    let source: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case streamId = "stream_id"
+        case source
+    }
+
+    init(sessionId: String? = nil, streamId: String? = nil, source: String? = nil) {
+        self.sessionId = sessionId
+        self.streamId = streamId
+        self.source = source
+    }
+}
+
+/// `session-updated` on `/api/session/stream` (#1208).
+struct SessionUpdatedEvent: Decodable, Equatable {
+    let sessionId: String?
+    let messageCount: Int?
+    let knownCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case messageCount = "message_count"
+        case knownCount = "known_count"
+    }
+
+    init(sessionId: String? = nil, messageCount: Int? = nil, knownCount: Int? = nil) {
+        self.sessionId = sessionId
+        self.messageCount = messageCount
+        self.knownCount = knownCount
+    }
 }
 
 struct TitleStreamEvent: Decodable, Equatable {
@@ -296,6 +338,12 @@ struct SSEEventDecoder {
                 decoder: decoder
             )
             return .pendingSteerLeftover(payload?.text ?? "")
+        case "server_turn_started":
+            let payload = decodePayload(ServerTurnStartedEvent.self, eventType: eventType, from: eventData, decoder: decoder)
+            return .serverTurnStarted(payload ?? ServerTurnStartedEvent())
+        case "session-updated", "session_updated":
+            let payload = decodePayload(SessionUpdatedEvent.self, eventType: eventType, from: eventData, decoder: decoder)
+            return .sessionUpdated(payload ?? SessionUpdatedEvent())
         case "stream_end":
             return .streamEnd
         case "cancel":
