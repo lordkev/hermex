@@ -29,7 +29,7 @@ struct HermesSessionListEntry: Hashable, Identifiable {
 /// pages; a bot's Bot Chat among them opens in that bot. Every page it reads goes to the offline
 /// cache, which it shows, read-only under the offline banner, while the host can't be reached (#1054).
 /// As the home's list it opens the session a link named (#1176), as that session's row would, and
-/// a Shortcut's new session (#1180), as New Session would.
+/// a Shortcut's new session (#1180) and a share (#1181), as New Session would.
 struct HermesSessionListView: View {
 
     @Environment(\.scenePhase) private var scenePhase
@@ -52,6 +52,9 @@ struct HermesSessionListView: View {
     @Binding private var pendingLink: HermesSessionDestination?
     /// The new session a Shortcut asked for, held by `ContentView` until this list can open it.
     @Binding private var pendingNewChat: HermesNewChatDestination?
+    /// The share `ContentView` reserved, and how this list tells it the share is open.
+    private let pendingShare: SharedImportReservation?
+    private let didRouteShare: (SharedImportReservation) -> Void
     @State private var viewModel: SessionListViewModel
     /// The chat, pushed screens, sheets and confirmations over the rows.
     @State private var covers = HermesSessionListCovers()
@@ -69,15 +72,19 @@ struct HermesSessionListView: View {
     }
 
     /// The Sessions side of the Hermes home, on a `model` the home keeps across its switch, so a
-    /// switch back shows the last rows at once (#709), and opening the session `pendingLink` names
-    /// and the new session `pendingNewChat` asks for.
+    /// switch back shows the last rows at once (#709), and opening the session `pendingLink` names,
+    /// the new session `pendingNewChat` asks for and `pendingShare`.
     init(entry: HermesSessionListEntry, model: SessionListViewModel, home: HermesHome?,
          pendingLink: Binding<HermesSessionDestination?> = .constant(nil),
-         pendingNewChat: Binding<HermesNewChatDestination?> = .constant(nil)) {
+         pendingNewChat: Binding<HermesNewChatDestination?> = .constant(nil),
+         pendingShare: SharedImportReservation? = nil,
+         didRouteShare: @escaping (SharedImportReservation) -> Void = { _ in }) {
         self.entry = entry
         self.home = home
         _pendingLink = pendingLink
         _pendingNewChat = pendingNewChat
+        self.pendingShare = pendingShare
+        self.didRouteShare = didRouteShare
         _searchText = State(initialValue: entry.query)
         _viewModel = State(initialValue: model)
     }
@@ -246,10 +253,13 @@ struct HermesSessionListView: View {
         // what it opens or says shows here.
         .onChange(of: pendingLink, initial: true) { covers.accept(pendingLink, on: entry.server) }
         .task(id: pendingLink) { await openPendingLink() }
-        // Brings the rows forward at once, then opens once the list has read the host live,
-        // whichever Profile the request names.
-        .onChange(of: NewChatReadiness(request: pendingNewChat, profile: profile, isLive: viewModel.isHermesLive),
-                  initial: true) { openPendingNewChat() }
+        // A Shortcut's new session brings the rows forward at once; it and a share open once the
+        // list has read the host live, whichever Profile the request names.
+        .onChange(of: NewChatReadiness(request: pendingNewChat, share: pendingShare?.reservationID, profile: profile,
+                                       isLive: viewModel.isHermesLive), initial: true) {
+            openPendingNewChat()
+            openPendingShare()
+        }
         .onDisappear {
             actionToast.dismiss()
             if covers.chat == nil { viewModel.closeHermes() } else { viewModel.pauseHermes() }
@@ -537,6 +547,20 @@ struct HermesSessionListView: View {
         if covers.open(pendingNewChat, on: entry, listed: profile, isLive: viewModel.isHermesLive) { pendingNewChat = nil }
     }
 
+    /// Opens a share (#1181) as a new session over whatever covers the rows, then hands it back
+    /// to `ContentView`, which consumes it: the chat's draft keeps it from here.
+    private func openPendingShare() {
+        guard let share = pendingShare,
+              let opening = share.hermesOpening(on: entry, listed: profile, isLive: viewModel.isHermesLive) else {
+            return
+        }
+        if case .chat(let chat) = opening {
+            covers.bringForward()
+            covers.chat = chat
+        }
+        didRouteShare(share)
+    }
+
     private func showLinkNotice(_ message: String) {
         actionToast.show(ActionToast(message: message, systemImage: "exclamationmark.triangle", accessibilityLabel: message))
     }
@@ -602,10 +626,32 @@ struct HermesSessionListView: View {
     }
 }
 
-/// What a Shortcut's new session waits on: its request, New Session's Profile, and the list's
-/// live read of the host.
+/// How the Hermes home's Sessions list takes a share (#1181).
+enum HermesShareOpening: Equatable {
+    /// A new session in New Session's Profile, its composer holding the shared text and files.
+    case chat(HermesSessionChat)
+    /// Nothing in the share survived staging: it is consumed without a chat, as on webui.
+    case nothing
+}
+
+extension SharedImportReservation {
+    /// What `entry`'s Sessions list opens for this share, in `listed`, the Profile its New Session
+    /// uses; nil until the list `isLive`, having read the host and showing no offline cache, as a
+    /// Shortcut's new session does.
+    @MainActor func hermesOpening(on entry: HermesSessionListEntry, listed: String?, isLive: Bool) -> HermesShareOpening? {
+        guard var chat = HermesNewChatDestination(server: entry.server, profile: nil)
+            .chat(on: entry, listed: listed, isLive: isLive) else { return nil }
+        chat.initialDraft = HermesShareDraft.composerDraft(from: sharedImport.draft)
+        chat.initialAttachments = sharedImport.attachments
+        return chat.initialDraft.isEmpty && chat.initialAttachments.isEmpty ? .nothing : .chat(chat)
+    }
+}
+
+/// What a Shortcut's new session and a share wait on: the request or share, New Session's
+/// Profile, and the list's live read of the host.
 private struct NewChatReadiness: Equatable {
     let request: HermesNewChatDestination?
+    let share: String?
     let profile: String?
     let isLive: Bool
 }

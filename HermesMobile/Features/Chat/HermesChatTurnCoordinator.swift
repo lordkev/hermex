@@ -74,6 +74,10 @@ struct HermesSessionChat: Hashable, Identifiable {
     var lineageRoot: String? = nil
     /// New Chat with Voice opened it on a Hermes server (#1180): its composer starts dictation.
     var autoStartsVoiceInput = false
+    /// A share opened it (#1181): the shared text and files its composer starts with. The files
+    /// are staged once, like a picked photo, and the Send uploads them.
+    var initialDraft = ""
+    var initialAttachments: [SharedAttachmentImport] = []
 
     /// What the chat lets the user do (#1145): a bot's Bot Chat keeps Bot Chat's rules.
     var policy: HermesChatPolicy { HermesChatPolicy(target: target, botChatRoot: botChatRoot) }

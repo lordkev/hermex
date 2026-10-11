@@ -411,6 +411,64 @@ final class SharedDraftStoreTests: XCTestCase {
         XCTAssertNil(try HermesShareDraft.loadPendingDraft(from: directory))
     }
 
+    // MARK: - On a Hermes server (#1181)
+
+    private let hermes = URL(string: "https://studio.example:9119")!
+    private let webui = URL(string: "https://webui.example")!
+
+    private func account(_ server: URL, _ kind: ServerKind) -> ServerAccount {
+        ServerAccount(id: server.absoluteString, urlString: server.absoluteString, displayName: "", initials: "",
+                      headerLogoColorHex: HeaderLogoColor.defaultHex, createdAt: Date(timeIntervalSince1970: 0),
+                      updatedAt: Date(timeIntervalSince1970: 0), kind: kind)
+    }
+
+    private func reservation(_ draft: String, _ attachments: [SharedAttachmentImport] = []) -> SharedImportReservation {
+        SharedImportReservation(itemID: "item", reservationID: UUID().uuidString, createdAt: Date(timeIntervalSince1970: 0),
+                                sharedImport: SharedImport(draft: draft, attachments: attachments))
+    }
+
+    @MainActor
+    func testTheHermesSessionsListOpensAShareAsANewSessionOnceItCan() throws {
+        let connection = BotConnection(id: UUID(), name: "Host", address: hermes, username: "me", password: "secret")
+        let entry = HermesSessionListEntry(server: hermes, connection: connection, profile: nil)
+        let photo = SharedAttachmentImport(filename: "photo.jpg", typeIdentifier: "public.jpeg", data: Data([1, 2, 3]))
+        let pdf = SharedAttachmentImport(filename: "notes.pdf", typeIdentifier: "com.adobe.pdf", data: Data([4, 5]))
+        let share = reservation("  Read this  ", [photo, pdf])
+
+        XCTAssertNil(share.hermesOpening(on: entry, listed: nil, isLive: true), "Waits for New Session's Profile")
+        XCTAssertNil(share.hermesOpening(on: entry, listed: "default", isLive: false),
+                     "Waits for the list's live read of the host, as a Shortcut's new session does")
+        guard case .chat(let chat)? = share.hermesOpening(on: entry, listed: "default", isLive: true) else {
+            return XCTFail("A share opens a new session")
+        }
+        XCTAssertEqual(chat.target, .new(profile: "default"))
+        XCTAssertEqual(chat.server, hermes)
+        XCTAssertEqual(chat.connection, connection)
+        XCTAssertEqual(chat.initialDraft, "Read this\n")
+        XCTAssertEqual(chat.initialAttachments, [photo, pdf])
+        XCTAssertFalse(chat.autoStartsVoiceInput)
+
+        guard case .chat(let filesOnly)? = reservation("", [pdf]).hermesOpening(on: entry, listed: "dev", isLive: true) else {
+            return XCTFail("A file alone opens a new session")
+        }
+        XCTAssertEqual(filesOnly.target, .new(profile: "dev"))
+        XCTAssertEqual(filesOnly.initialDraft, "")
+        XCTAssertEqual(filesOnly.initialAttachments, [pdf])
+
+        XCTAssertEqual(reservation(" \n ").hermesOpening(on: entry, listed: "default", isLive: true), .nothing,
+                       "An empty share is consumed without a chat")
+    }
+
+    func testAHermesServerOpensEachShareAsItArrives() {
+        let servers = [account(hermes, .hermes), account(webui, .webui)]
+        XCTAssertTrue(SharedImportGate.opensNext(afterRouting: false, active: webui, servers: servers))
+        XCTAssertFalse(SharedImportGate.opensNext(afterRouting: true, active: webui, servers: servers),
+                       "The webui list offers a later share in its Open Next banner")
+        XCTAssertTrue(SharedImportGate.opensNext(afterRouting: false, active: hermes, servers: servers))
+        XCTAssertTrue(SharedImportGate.opensNext(afterRouting: true, active: hermes, servers: servers),
+                      "The Hermes home has no banner, so a later share opens too")
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
