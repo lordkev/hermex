@@ -76,5 +76,10 @@ One caveat: two configured servers that reach the same host (LAN and a tunnel,
 webui or Hermes) pair with the same install, because the host hands out one key
 pair. A tap on one of that host's banners then prefers the active server and
 otherwise takes the first matching server by URL, and the chosen server's kind
-picks the route: a webui server's Bot connection or a Hermes server's session.
-A webui push only ever takes a webui server, even while a Hermes alias is active.
+picks the route: a webui server's Bot connection or a Hermes server's session
+(`PushNotificationRouter.botDestination`). A webui push only ever takes a webui
+server, even while a Hermes alias is active. The relay keys a device by install
+and token, so both entries share one registration: removing or turning off one
+keeps it for the other, and only the last one deletes it
+(`PushRegistrar.forget` and `disable`, #1178). Their preferences are that one
+registration too, so the last choice saved under either entry applies to both.
