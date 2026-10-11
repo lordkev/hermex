@@ -682,8 +682,8 @@ extension SharedImportReservation {
 
     /// Moves the share into `chat`'s new-session draft, which the chat opens on: its text after
     /// any unsent text, its files after any staged ones, each as a Hermes send takes it
-    /// (`BotAttachmentUpload.prepare`, Bot Chat's limits). A file Hermes can't take now (its type,
-    /// an unreadable image, no room left in the draft) throws its reason and moves nothing, so the
+    /// (`BotAttachmentUpload.prepare`, Bot Chat's limits). A file Hermes can't take now (its type or
+    /// size, an unreadable image, no room left in the draft) throws its reason and moves nothing, so the
     /// whole share stays recoverable. Once it returns the draft owns the share, under its item id,
     /// so a retry or replay adds nothing; a throw leaves the draft as it was.
     @MainActor func moveIntoDraft(of chat: HermesSessionChat, drafts: ChatDraftStore = .shared) async throws {
@@ -703,7 +703,8 @@ extension SharedImportReservation {
                 } catch {
                     throw error as? BotAttachmentFailure ?? .unreadable
                 }
-                guard room > 0, bytes + prepared.data.count <= BotAttachmentUpload.maximumTotalBytes else {
+                guard room > 0, prepared.data.count <= BotAttachmentUpload.maximumFileBytes,
+                      bytes + prepared.data.count <= BotAttachmentUpload.maximumTotalBytes else {
                     throw BotAttachmentFailure.limit
                 }
                 room -= 1
@@ -713,7 +714,12 @@ extension SharedImportReservation {
             try Task.checkCancellation()
         }
         try await drafts.appendShare(itemID, text: HermesShareDraft.composerDraft(from: sharedImport.draft), files: files,
-                                     to: key, maximumFileBytes: BotAttachmentUpload.maximumFileBytes)
+                                     to: key, maximumFileBytes: BotAttachmentUpload.maximumFileBytes) { attachments in
+            // A composer open on this draft may have added files since the check above.
+            guard attachments.count <= HermexAttachmentPickerPolicy.maximumBotAttachments,
+                  attachments.reduce(0, { $0 + ($1.size ?? BotAttachmentUpload.maximumFileBytes) })
+                    <= BotAttachmentUpload.maximumTotalBytes else { throw BotAttachmentFailure.limit }
+        }
     }
 }
 

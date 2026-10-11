@@ -731,12 +731,14 @@ final class ChatDraftStore {
     /// `shareID` then land in one change that is on disk, and still in the
     /// draft, before this returns, so the caller can let go of the share. A
     /// share already there (a retry, or a replay after the app quit before
-    /// letting go) adds nothing and returns once it is on disk. A throw
-    /// (cancellation, storage, a record dropped meanwhile) takes back only what
-    /// this share added, so the share can be moved again.
+    /// letting go) adds nothing and returns once it is on disk. `fits` vets the
+    /// draft's records with the share's files added, in the same step that adds
+    /// them, and throws if they don't fit. A throw (cancellation, storage, a limit,
+    /// a record or the text dropped meanwhile) takes back only what this share
+    /// added, on disk before its copies go, so the share can be moved again.
     func appendShare(
         _ shareID: String, text: String, files: [(data: Data, name: String, mime: String, image: Bool)],
-        to key: ChatDraftKey, maximumFileBytes: Int
+        to key: ChatDraftKey, maximumFileBytes: Int, admitting fits: ([ChatDraftAttachment]) throws -> Void = { _ in }
     ) async throws {
         await loadIfNeeded()
         func isHere() -> Bool { drafts[key]?.sharedImportIDs.contains(shareID) == true }
@@ -768,6 +770,13 @@ final class ChatDraftStore {
             guard isHere() else { throw ChatDraftStorageError.unavailable }
             return
         }
+        if !records.isEmpty {
+            // Checked in the step that commits, so files a composer added meanwhile count.
+            do { try fits((drafts[key]?.attachments ?? []) + records) } catch {
+                await deleteCopies()
+                throw error
+            }
+        }
         let unsent = drafts[key]?.text ?? ""
         updateDraft(for: key) { draft in
             let trimmed = draft.text.trimmingCharacters(in: .newlines)
@@ -779,8 +788,9 @@ final class ChatDraftStore {
         let ids = Set(records.map(\.id))
         do {
             try await flush()
-            // A composer's send or snapshot during the write may have dropped a record.
-            guard isHere(), ids.isSubset(of: Set(drafts[key]?.attachments.map(\.id) ?? [])) else {
+            // A composer's send, snapshot or typing during the write may have dropped a record or the text.
+            guard isHere(), ids.isSubset(of: Set(drafts[key]?.attachments.map(\.id) ?? [])),
+                  text.isEmpty || drafts[key]?.text.contains(text) == true else {
                 throw ChatDraftStorageError.unavailable
             }
         } catch {
@@ -789,7 +799,8 @@ final class ChatDraftStore {
                 draft.attachments.removeAll { ids.contains($0.id) }
                 if draft.text == merged { draft.text = unsent }
             }
-            await deleteCopies()
+            // A replay after a quit must not find the share here. Unsaved, the copies stay.
+            if (try? await flush()) != nil { await deleteCopies() }
             throw error
         }
     }
