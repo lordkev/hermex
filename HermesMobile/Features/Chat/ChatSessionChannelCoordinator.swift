@@ -84,6 +84,11 @@ final class ChatSessionChannelCoordinator {
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
     /// Another change arrived while a reload was in flight; run one more after it.
     @ObservationIgnored private var reloadPending = false
+    /// Identifies the current reload loop. `stopMonitoring` releases a reload
+    /// without cancelling it — a cancelled transcript request would surface as a
+    /// load error — and the bumped token stops it from looping on or clearing a
+    /// newer one. The delegate discards a stale result itself.
+    @ObservationIgnored private var reloadToken = 0
 
     var isMonitoring: Bool { monitoringSessionID != nil }
     var isFallbackPolling: Bool { fallbackPollingTask != nil }
@@ -148,7 +153,7 @@ final class ChatSessionChannelCoordinator {
         let hadChannel = monitoringSessionID != nil || fallbackPollingTask != nil
         fallbackPollingTask?.cancel()
         fallbackPollingTask = nil
-        reloadTask?.cancel()
+        reloadToken += 1
         reloadTask = nil
         reloadPending = false
         if hadChannel {
@@ -212,18 +217,17 @@ final class ChatSessionChannelCoordinator {
             reloadPending = true
             return
         }
+        let token = reloadToken
         reloadTask = Task { @MainActor [weak self] in
             var reason = reason
-            while let self, !Task.isCancelled {
+            while let self, self.reloadToken == token {
                 self.reloadPending = false
                 await self.delegate?.sessionChannelDidDetectServerChange(reason: reason)
-                guard self.reloadPending, !Task.isCancelled else { break }
+                guard self.reloadToken == token, self.reloadPending else { break }
                 reason = .polled
             }
-            // A cancelled reload was already released by `stopMonitoring`, which may
-            // have started a newer one since.
-            guard !Task.isCancelled else { return }
-            self?.reloadTask = nil
+            guard let self, self.reloadToken == token else { return }
+            self.reloadTask = nil
         }
     }
 

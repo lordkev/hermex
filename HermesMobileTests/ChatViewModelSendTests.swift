@@ -10920,6 +10920,37 @@ final class ChatViewModelSendTests: XCTestCase {
         XCTAssertEqual(viewModel.sessionChannelKnownMessageCount, before)
     }
 
+    /// A session-channel reload can be loading when the user sends. Its response
+    /// predates the send, so applying it would replace the transcript and drop
+    /// the row the send just added (#1208 review). The send must win.
+    @MainActor
+    func testSessionChannelReloadOverlappingASendIsDiscarded() async throws {
+        let requested = expectation(description: "transcript requested")
+        let released = expectation(description: "transcript released")
+        let release = DispatchSemaphore(value: 0)
+        let viewModel = try makeViewModel { request in
+            guard request.url?.path == "/api/session" else {
+                return apiTestJSONResponse("{}", for: request)
+            }
+            requested.fulfill()
+            release.wait()
+            defer { released.fulfill() }
+            return apiTestJSONResponse(#"{"session":{"messages":[]}}"#, for: request)
+        }
+        let reload = Task { await viewModel.sessionChannelDidDetectServerChange(reason: .polled) }
+        await fulfillment(of: [requested], timeout: 3)
+
+        // A send starts while the reload's request is in flight and adds its row.
+        viewModel.turnSubmissionDidChange(started: true)
+        viewModel.appendLocalAssistantMessage("row added by the send")
+        release.signal()
+        await reload.value
+        await fulfillment(of: [released], timeout: 3)
+
+        XCTAssertEqual(viewModel.messages.map(\.content), ["row added by the send"])
+        XCTAssertFalse(viewModel.sessionChannelCoordinator.isMonitoring, "a send closes the channel")
+    }
+
     @MainActor
     private func makeViewModel(
         streamClient: SSEStreamingClient? = nil,

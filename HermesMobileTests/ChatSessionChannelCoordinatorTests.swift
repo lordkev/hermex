@@ -156,6 +156,28 @@ final class ChatSessionChannelCoordinatorTests: XCTestCase {
         )
     }
 
+    func testStoppingReleasesAReloadWithoutBlockingTheNextChannel() async {
+        let (coordinator, stream, delegate) = makeCoordinator()
+        delegate.holdReload = true
+        coordinator.startMonitoringIfIdle()
+        stream.emit(.serverTurnStarted(ServerTurnStartedEvent(sessionId: "session-1", streamId: "a", source: nil)))
+        await delegate.waitForReloadStart()
+        stream.emit(.sessionUpdated(SessionUpdatedEvent(sessionId: "session-1", messageCount: 9, knownCount: 0)))
+
+        // A send closes the channel mid-reload, then the turn ends and it reopens.
+        coordinator.stopMonitoring()
+        coordinator.startMonitoringIfIdle()
+        delegate.holdReload = false
+        delegate.releaseReload()
+        await delegate.waitForReloads(1)
+        await delegate.settle()
+        XCTAssertEqual(delegate.reloadReasons, [.serverTurnStarted(streamID: "a")], "the released reload runs no follow-up")
+
+        stream.emit(.serverTurnStarted(ServerTurnStartedEvent(sessionId: "session-1", streamId: "b", source: nil)))
+        await delegate.waitForReloads(2)
+        XCTAssertEqual(delegate.reloadReasons.last, .serverTurnStarted(streamID: "b"), "the new channel's reloads still run")
+    }
+
     func testAnEventAfterTheReloadFinishedStartsANewOne() async {
         let (coordinator, stream, delegate) = makeCoordinator()
         coordinator.startMonitoringIfIdle()

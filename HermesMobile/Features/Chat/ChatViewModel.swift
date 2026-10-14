@@ -236,7 +236,7 @@ final class ChatViewModel {
     private(set) var displayedTranscriptMessages: [TranscriptMessage] = []
     private(set) var isLoading = false
     private(set) var isLoadingOlderMessages = false
-    private(set) var isStartingChat = false
+    private(set) var isStartingChat = false { didSet { turnSubmissionDidChange(started: isStartingChat && !oldValue) } }
     /// True while a recorded voice note is being transcribed, uploaded, and sent.
     /// Spans all three steps so the composer can show progress and disable input.
     private(set) var isSendingVoiceNote = false
@@ -247,8 +247,13 @@ final class ChatViewModel {
     /// The row a Hermes chat opened from named a parent, and its host has not answered yet.
     @ObservationIgnored private var needsHermesForkCheck = false
     @ObservationIgnored private var isCheckingHermesForkParent = false
-    private(set) var isEditingMessage = false
-    private(set) var isRegeneratingMessage = false
+    private(set) var isEditingMessage = false { didSet { turnSubmissionDidChange(started: isEditingMessage && !oldValue) } }
+    private(set) var isRegeneratingMessage = false { didSet { turnSubmissionDidChange(started: isRegeneratingMessage && !oldValue) } }
+    /// Bumped when a send, retry, edit or regenerate starts. A session-channel
+    /// reload that was already loading discards its response if this moved
+    /// (`loadMessages(discardIfTurnSubmitted:)`), so it can never replace the
+    /// transcript under a send in flight (#1208).
+    @ObservationIgnored private var turnSubmissionGeneration = 0
     /// A Hermes `/undo` is out (#1049). Send waits, since each one removes an exchange for good.
     private(set) var isUndoingExchange = false
     private(set) var isCompressingSession = false
@@ -1820,7 +1825,11 @@ final class ChatViewModel {
     /// Reloads the newest transcript window from the server. `usesInitialPrefetch`
     /// is for the chat's first load only: it takes over the request
     /// `prepareInitialMessageLoad` already sent instead of sending another.
-    func loadMessages(modelContext: ModelContext? = nil, usesInitialPrefetch: Bool = false) async {
+    func loadMessages(
+        modelContext: ModelContext? = nil,
+        usesInitialPrefetch: Bool = false,
+        discardIfTurnSubmitted: Bool = false
+    ) async {
         if let hermesTurn {
             if let modelContext { hermesCache = modelContext }
             // A Bot Chat shows its cached transcript at once, read-only, until the attach's
@@ -1835,6 +1844,7 @@ final class ChatViewModel {
         }
 
         let prefetchedSession = takeInitialSessionPrefetch(usable: usesInitialPrefetch)
+        let submissionGenerationAtStart = turnSubmissionGeneration
 
         resetPendingStreamingContentBuffers()
         latestServerLoadHadAssistantResponseAfterLatestUser = false
@@ -1878,6 +1888,9 @@ final class ChatViewModel {
             } else {
                 response = try await Self.requestNewestTranscriptWindow(client: client, sessionID: sessionID)
             }
+            // A background reload (session channel) loses to a turn this client
+            // started while it was in flight: that turn owns the transcript now.
+            if discardIfTurnSubmitted, turnSubmissionGeneration != submissionGenerationAtStart { return }
             let session = response.session
             let loadedMessages = session?.messages ?? []
             let loadedActiveStreamID = session?.activeStreamId?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -7583,7 +7596,24 @@ extension ChatViewModel: ChatPendingActionCoordinatorDelegate {
 
 extension ChatViewModel: ChatSessionChannelCoordinatorDelegate {
     var sessionChannelSessionID: String? { hermesTurn == nil ? sessionID : nil }
-    var sessionChannelHasActiveStream: Bool { activeStreamID != nil }
+    /// A turn of this client's own — streaming, or still being submitted — keeps
+    /// the channel closed: its own response carries everything.
+    var sessionChannelHasActiveStream: Bool { activeStreamID != nil || isSubmittingTurn }
+
+    private var isSubmittingTurn: Bool { isStartingChat || isEditingMessage || isRegeneratingMessage }
+
+    /// Send, retry, edit and regenerate all pass through one of the three
+    /// submission flags. Starting one closes the channel before the optimistic
+    /// row is added; the last one ending reopens it if no stream took over
+    /// (a failed send).
+    func turnSubmissionDidChange(started: Bool) {
+        if started {
+            turnSubmissionGeneration += 1
+            sessionChannelCoordinator.stopMonitoring()
+        } else if !isSubmittingTurn {
+            sessionChannelCoordinator.startMonitoringIfIdle()
+        }
+    }
     /// Server-backed messages only: slash-command output and notices
     /// (`local_*` roles) exist on this device alone and would hide a server reply.
     var sessionChannelKnownMessageCount: Int {
@@ -7595,8 +7625,9 @@ extension ChatViewModel: ChatSessionChannelCoordinatorDelegate {
     /// chat that opens mid-turn does, so a `server_turn_started` streams live and
     /// a `session-updated` pulls the finished turn.
     func sessionChannelDidDetectServerChange(reason: ChatSessionChannelChangeReason) async {
-        guard activeStreamID == nil else { return }
-        await loadMessages()
+        guard activeStreamID == nil, !isSubmittingTurn else { return }
+        await loadMessages(discardIfTurnSubmitted: true)
+        guard !isSubmittingTurn else { return }
         await reconnectStreamIfNeeded()
     }
 
