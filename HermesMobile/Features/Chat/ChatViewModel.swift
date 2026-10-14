@@ -7624,11 +7624,13 @@ extension ChatViewModel: ChatSessionChannelCoordinatorDelegate {
     /// `active_stream_id` and `reconcileSessionLoad` attaches to it exactly as a
     /// chat that opens mid-turn does, so a `server_turn_started` streams live and
     /// a `session-updated` pulls the finished turn.
-    func sessionChannelDidDetectServerChange(reason: ChatSessionChannelChangeReason) async {
-        guard activeStreamID == nil, !isSubmittingTurn else { return }
+    func sessionChannelDidDetectServerChange(reason: ChatSessionChannelChangeReason) async -> Bool {
+        guard activeStreamID == nil, !isSubmittingTurn else { return true }
         await loadMessages(discardIfTurnSubmitted: true)
-        guard !isSubmittingTurn else { return }
+        guard !isSubmittingTurn else { return true }
+        guard lastError == nil else { return false }
         await reconnectStreamIfNeeded()
+        return true
     }
 
     func setLiveSessionUpdatesEnabled(_ enabled: Bool) {

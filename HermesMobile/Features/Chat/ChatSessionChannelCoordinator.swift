@@ -35,9 +35,10 @@ protocol ChatSessionChannelCoordinatorDelegate: AnyObject {
 
     /// The session changed on the server. The delegate reloads it; a load that
     /// finds an active stream attaches to it the same way a chat that opens
-    /// mid-turn does. A failed load needs no reporting: the poller compares
-    /// counts again on its next tick and the channel's next event re-triggers.
-    func sessionChannelDidDetectServerChange(reason: ChatSessionChannelChangeReason) async
+    /// mid-turn does. Returns false when the load failed, so the coordinator
+    /// retries it after a poll interval; true when the transcript is current or
+    /// a turn of the chat's own took over.
+    func sessionChannelDidDetectServerChange(reason: ChatSessionChannelChangeReason) async -> Bool
 }
 
 enum ChatSessionChannelChangeReason: Equatable {
@@ -66,7 +67,9 @@ final class ChatSessionChannelCoordinator {
 
     private let client: APIClient
     private let streamClient: SSEStreamingClient
-    private let fallbackPollingIntervalNanoseconds: UInt64
+    /// Waits one poll interval: between fallback polls and before retrying a
+    /// failed reload. Injected so tests advance it by hand.
+    private let pollInterval: @MainActor () async -> Void
     private var isEnabled: Bool
 
     private(set) var monitoringSessionID: String?
@@ -96,13 +99,13 @@ final class ChatSessionChannelCoordinator {
     init(
         client: APIClient,
         streamClient: SSEStreamingClient,
-        fallbackPollingIntervalNanoseconds: UInt64 = 5_000_000_000,
-        isEnabled: Bool = ChatSessionChannelPreference.isEnabled()
+        isEnabled: Bool = ChatSessionChannelPreference.isEnabled(),
+        pollInterval: (@MainActor () async -> Void)? = nil
     ) {
         self.client = client
         self.streamClient = streamClient
-        self.fallbackPollingIntervalNanoseconds = fallbackPollingIntervalNanoseconds
         self.isEnabled = isEnabled
+        self.pollInterval = pollInterval ?? { try? await Task.sleep(nanoseconds: 5_000_000_000) }
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -211,7 +214,9 @@ final class ChatSessionChannelCoordinator {
     /// a `server_turn_started` closely followed by its `session-updated`, or a
     /// second turn finishing — is not dropped: it runs one more reload after
     /// the current one, since the load in flight may have read the older
-    /// transcript.
+    /// transcript. A reload that fails is retried after a poll interval until
+    /// one succeeds or the channel closes: a healthy channel sends no further
+    /// event for a change it already reported.
     private func scheduleReload(_ reason: ChatSessionChannelChangeReason) {
         guard reloadTask == nil else {
             reloadPending = true
@@ -222,8 +227,13 @@ final class ChatSessionChannelCoordinator {
             var reason = reason
             while let self, self.reloadToken == token {
                 self.reloadPending = false
-                await self.delegate?.sessionChannelDidDetectServerChange(reason: reason)
-                guard self.reloadToken == token, self.reloadPending else { break }
+                let isCurrent = await self.delegate?.sessionChannelDidDetectServerChange(reason: reason) ?? true
+                guard self.reloadToken == token else { break }
+                if !isCurrent {
+                    await self.pollInterval()
+                } else if !self.reloadPending {
+                    break
+                }
                 reason = .polled
             }
             guard let self, self.reloadToken == token else { return }
@@ -235,7 +245,7 @@ final class ChatSessionChannelCoordinator {
         guard monitoringSessionID == sessionID else { return }
         streamClient.stop()
         fallbackPollingTask?.cancel()
-        let interval = fallbackPollingIntervalNanoseconds
+        let interval = pollInterval
         chatSessionChannelCoordinatorLogger.info("session channel dropped; polling /api/session/status")
         fallbackPollingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -245,7 +255,7 @@ final class ChatSessionChannelCoordinator {
                 else { break }
                 await self.pollOnce(sessionID: sessionID)
                 guard !Task.isCancelled else { break }
-                try? await Task.sleep(nanoseconds: interval)
+                await interval()
             }
             // The loop ends when the chat's own turn takes over or the chat moves
             // to another session. Release the session so the next

@@ -10944,11 +10944,33 @@ final class ChatViewModelSendTests: XCTestCase {
         viewModel.turnSubmissionDidChange(started: true)
         viewModel.appendLocalAssistantMessage("row added by the send")
         release.signal()
-        await reload.value
+        let isCurrent = await reload.value
         await fulfillment(of: [released], timeout: 3)
 
         XCTAssertEqual(viewModel.messages.map(\.content), ["row added by the send"])
+        XCTAssertTrue(isCurrent, "the send owns the transcript now; nothing to retry")
         XCTAssertFalse(viewModel.sessionChannelCoordinator.isMonitoring, "a send closes the channel")
+    }
+
+    /// A channel-driven reload that fails must say so, or a healthy channel —
+    /// which reports each change once — would leave the reply missing (#1208 review).
+    @MainActor
+    func testSessionChannelReloadReportsAFailedLoad() async throws {
+        var failTranscript = true
+        let viewModel = try makeViewModel { request in
+            if request.url?.path == "/api/session", failTranscript {
+                let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+                return (response, Data("{}".utf8))
+            }
+            return apiTestJSONResponse(#"{"session":{"messages":[]}}"#, for: request)
+        }
+
+        let failed = await viewModel.sessionChannelDidDetectServerChange(reason: .polled)
+        failTranscript = false
+        let recovered = await viewModel.sessionChannelDidDetectServerChange(reason: .polled)
+
+        XCTAssertFalse(failed)
+        XCTAssertTrue(recovered)
     }
 
     @MainActor
