@@ -6168,6 +6168,9 @@ final class ChatViewModel {
     func networkPathDidChange(modelContext: ModelContext? = nil) async {
         if hermesTurn != nil, let modelContext { hermesCache = modelContext }
         await turn.networkPathDidChange(modelContext: modelContext)
+        // An idle chat's session channel may have dropped (or never opened) with
+        // the old path; reopen it on the new one (#1208).
+        sessionChannelCoordinator.reconnectIfIdle()
     }
 
     func refreshTranscriptIfActiveStreamCompleted(
@@ -7581,7 +7584,11 @@ extension ChatViewModel: ChatPendingActionCoordinatorDelegate {
 extension ChatViewModel: ChatSessionChannelCoordinatorDelegate {
     var sessionChannelSessionID: String? { hermesTurn == nil ? sessionID : nil }
     var sessionChannelHasActiveStream: Bool { activeStreamID != nil }
-    var sessionChannelKnownMessageCount: Int { messagesOffset + messages.count }
+    /// Server-backed messages only: slash-command output and notices
+    /// (`local_*` roles) exist on this device alone and would hide a server reply.
+    var sessionChannelKnownMessageCount: Int {
+        messagesOffset + messages.reduce(0) { $0 + (($1.role ?? "").hasPrefix("local_") ? 0 : 1) }
+    }
 
     /// A reload is the whole reaction: `loadMessages` reads the session's
     /// `active_stream_id` and `reconcileSessionLoad` attaches to it exactly as a

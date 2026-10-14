@@ -65307,6 +65307,218 @@
       "shouldTranslate" : false
     },
     "Happy" : { "localizations" : { "de" : { "stringUnit" : { "state" : "needs_review", "value" : "Fröhlich" } }, "es" : { "stringUnit" : { "state" : "needs_review", "value" : "Feliz" } }, "fr" : { "stringUnit" : { "state" : "needs_review", "value" : "Heureux" } }, "it" : { "stringUnit" : { "state" : "needs_review", "value" : "Felice" } }, "pl" : { "stringUnit" : { "state" : "needs_review", "value" : "Radosny" } }, "pt-BR" : { "stringUnit" : { "state" : "needs_review", "value" : "Feliz" } }, "nl" : { "stringUnit" : { "state" : "needs_review", "value" : "Blij" } }, "tr" : { "stringUnit" : { "state" : "needs_review", "value" : "Mutlu" } }, "ru" : { "stringUnit" : { "state" : "needs_review", "value" : "Радостное" } }, "ja" : { "stringUnit" : { "state" : "needs_review", "value" : "うれしい" } }, "zh-Hans" : { "stringUnit" : { "state" : "needs_review", "value" : "开心" } }, "ko" : { "stringUnit" : { "state" : "needs_review", "value" : "행복" } }, "ar" : { "stringUnit" : { "state" : "needs_review", "value" : "سعيد" } }, "he" : { "stringUnit" : { "state" : "needs_review", "value" : "שמח" } }, "ur" : { "stringUnit" : { "state" : "needs_review", "value" : "خوش" } }, "zh-Hant" : { "stringUnit" : { "state" : "needs_review", "value" : "開心" } }, "zh-HK" : { "stringUnit" : { "state" : "needs_review", "value" : "開心" } } } },
+    "Live Session Updates" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تحديثات الجلسة المباشرة"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Live-Sitzungsaktualisierungen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Actualizaciones de sesión en vivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mises à jour de session en direct"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "עדכוני מפגש בזמן אמת"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aggiornamenti della sessione in tempo reale"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "セッションのライブ更新"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "실시간 세션 업데이트"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Live sessie-updates"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aktualizacje sesji na żywo"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Atualizações da sessão ao vivo"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Обновления сессии в реальном времени"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Canlı Oturum Güncellemeleri"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "لائیو سیشن اپ ڈیٹس"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "即時工作階段更新"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "实时会话更新"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "即時工作階段更新"
+          }
+        }
+      }
+    },
+    "Shows replies the agent starts on its own — finished background jobs, scheduled tasks — while a chat is open and idle." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "يعرض الردود التي يبدأها العميل من تلقاء نفسه — مثل المهام الخلفية المكتملة والمهام المجدولة — أثناء فتح المحادثة وعدم نشاطها."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zeigt Antworten, die der Agent von sich aus startet – abgeschlossene Hintergrundaufgaben, geplante Aufgaben –, während ein Chat geöffnet und inaktiv ist."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Muestra las respuestas que el agente inicia por su cuenta —tareas en segundo plano finalizadas, tareas programadas— mientras un chat está abierto e inactivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Affiche les réponses que l'agent lance de lui-même — tâches en arrière-plan terminées, tâches planifiées — lorsqu'une conversation est ouverte et inactive."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "מציג תשובות שהסוכן מתחיל מיוזמתו — משימות רקע שהסתיימו, משימות מתוזמנות — כשצ׳אט פתוח ואינו פעיל."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mostra le risposte che l'agente avvia da solo — attività in background completate, attività pianificate — mentre una chat è aperta e inattiva."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "チャットを開いたまま操作していないときに、エージェントが自ら開始した返信（完了したバックグラウンドジョブや予定されたタスクなど）を表示します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "채팅이 열려 있고 유휴 상태일 때 에이전트가 스스로 시작한 응답(완료된 백그라운드 작업, 예약된 작업 등)을 표시합니다."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Toont antwoorden die de agent zelf start — voltooide achtergrondtaken, geplande taken — terwijl een chat open en inactief is."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pokazuje odpowiedzi, które agent rozpoczyna samodzielnie — zakończone zadania w tle, zaplanowane zadania — gdy czat jest otwarty i bezczynny."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mostra respostas que o agente inicia por conta própria — tarefas em segundo plano concluídas, tarefas agendadas — enquanto um chat está aberto e ocioso."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Показывает ответы, которые агент начинает сам, — завершённые фоновые задачи, запланированные задачи, — пока чат открыт и неактивен."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bir sohbet açık ve boştayken ajanın kendi başlattığı yanıtları — tamamlanan arka plan işleri, zamanlanmış görevler — gösterir."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "جب چیٹ کھلی اور غیر فعال ہو تو ایجنٹ کے خود شروع کیے گئے جوابات — مکمل شدہ پس منظر کے کام، طے شدہ کام — دکھاتا ہے۔"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "在聊天開啟且閒置時，顯示代理主動發起的回覆——例如已完成的背景工作、排定的工作。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "在聊天处于打开且空闲状态时，显示智能体主动发起的回复——例如已完成的后台任务、定时任务。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "在聊天開啟且閒置時，顯示代理人主動發起的回覆——例如已完成的背景工作、排定的工作。"
+          }
+        }
+      }
+    },
     "Haptic Feedback" : {
       "localizations" : {
         "ar" : {

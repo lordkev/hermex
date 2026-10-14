@@ -133,19 +133,39 @@ final class ChatSessionChannelCoordinatorTests: XCTestCase {
         XCTAssertTrue(delegate.reloadReasons.isEmpty)
     }
 
-    func testBurstOfEventsCoalescesIntoOneReloadInFlight() async {
+    func testChangesDuringAReloadRunExactlyOneMoreReload() async {
         let (coordinator, stream, delegate) = makeCoordinator()
         delegate.holdReload = true
         coordinator.startMonitoringIfIdle()
 
         stream.emit(.serverTurnStarted(ServerTurnStartedEvent(sessionId: "session-1", streamId: "s", source: nil)))
+        await delegate.waitForReloadStart()
+        // Both arrive while the first load is in flight; it may already have read
+        // the older transcript, so one follow-up load must run — but only one.
         stream.emit(.sessionUpdated(SessionUpdatedEvent(sessionId: "session-1", messageCount: 50, knownCount: 0)))
         stream.emit(.sessionUpdated(SessionUpdatedEvent(sessionId: "session-1", messageCount: 51, knownCount: 0)))
-        await delegate.waitForReloadStart()
+        delegate.holdReload = false
         delegate.releaseReload()
-        await delegate.waitForReload()
+        await delegate.waitForReloads(2)
+        await delegate.settle()
 
-        XCTAssertEqual(delegate.reloadReasons.count, 1)
+        XCTAssertEqual(
+            delegate.reloadReasons,
+            [.serverTurnStarted(streamID: "s"), .polled],
+            "the burst during the load collapses into one follow-up"
+        )
+    }
+
+    func testAnEventAfterTheReloadFinishedStartsANewOne() async {
+        let (coordinator, stream, delegate) = makeCoordinator()
+        coordinator.startMonitoringIfIdle()
+
+        stream.emit(.serverTurnStarted(ServerTurnStartedEvent(sessionId: "session-1", streamId: "a", source: nil)))
+        await delegate.waitForReloads(1)
+        stream.emit(.serverTurnStarted(ServerTurnStartedEvent(sessionId: "session-1", streamId: "b", source: nil)))
+        await delegate.waitForReloads(2)
+
+        XCTAssertEqual(delegate.reloadReasons, [.serverTurnStarted(streamID: "a"), .serverTurnStarted(streamID: "b")])
     }
 
     // MARK: - Fallback polling
@@ -162,6 +182,7 @@ final class ChatSessionChannelCoordinatorTests: XCTestCase {
             }
         )
         delegate.messageCount = 3
+        delegate.attachesOnReload = true
         coordinator.startMonitoringIfIdle()
 
         stream.emit(.heartbeat)
@@ -184,6 +205,7 @@ final class ChatSessionChannelCoordinatorTests: XCTestCase {
             }
         )
         delegate.messageCount = 3
+        delegate.messageCountAfterReload = 5
         coordinator.startMonitoringIfIdle()
 
         stream.emit(.heartbeat)
@@ -215,6 +237,113 @@ final class ChatSessionChannelCoordinatorTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 50_000_000)
 
         XCTAssertEqual(statusCalls, callsWhenStreamStarted, "polling ends once the chat streams a turn of its own")
+    }
+
+    func testFailedReloadIsRetriedOnTheNextPoll() async {
+        let (coordinator, stream, delegate) = makeCoordinator(
+            fallbackPollingIntervalNanoseconds: 10_000_000,
+            statusHandler: { _ in Self.statusBody(activeStreamID: nil, messageCount: 5) }
+        )
+        delegate.messageCount = 3
+        coordinator.startMonitoringIfIdle()
+        stream.emit(.heartbeat)
+        stream.emit(.transportError("socket reset"))
+
+        // The delegate's loads "fail": the transcript stays at 3 while the server has 5.
+        await delegate.waitForReloads(3, timeout: 3)
+        XCTAssertGreaterThanOrEqual(delegate.reloadReasons.count, 3, "each poll that still sees the server ahead retries")
+
+        // A load finally succeeds: the transcript catches up and the retries stop.
+        delegate.messageCount = 5
+        await delegate.settle()
+        let afterRecovery = delegate.reloadReasons.count
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(delegate.reloadReasons.count, afterRecovery)
+        withExtendedLifetime(coordinator) {}
+    }
+
+    func testPollingThatEndsForATurnOfItsOwnReleasesTheSessionForANewChannel() async {
+        let (coordinator, stream, delegate) = makeCoordinator(
+            fallbackPollingIntervalNanoseconds: 10_000_000,
+            statusHandler: { _ in Self.statusBody(activeStreamID: nil, messageCount: 3) }
+        )
+        delegate.messageCount = 3
+        coordinator.startMonitoringIfIdle()
+        stream.emit(.heartbeat)
+        stream.emit(.transportError("socket reset"))
+        XCTAssertTrue(coordinator.isFallbackPolling)
+
+        // The chat starts streaming without going through stopMonitoring (the loop
+        // notices on its next tick) — the coordinator must not stay stuck "monitoring".
+        delegate.hasActiveStream = true
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertFalse(coordinator.isFallbackPolling)
+        XCTAssertFalse(coordinator.isMonitoring)
+
+        delegate.hasActiveStream = false
+        coordinator.startMonitoringIfIdle()
+        XCTAssertTrue(coordinator.isMonitoring)
+        XCTAssertEqual(stream.startedURLs.count, 2, "the turn's end reopens the channel")
+    }
+
+    func testAClarifyInitialFrameCountsAsAnOpenChannel() async {
+        let (coordinator, stream, delegate) = makeCoordinator(
+            fallbackPollingIntervalNanoseconds: 10_000_000,
+            statusHandler: { _ in Self.statusBody(activeStreamID: nil, messageCount: 0) }
+        )
+        coordinator.startMonitoringIfIdle()
+
+        stream.emit(.clarificationPending(ClarificationPendingResponse(pending: nil, pendingCount: 0)))
+        stream.emit(.transportError("socket reset"))
+
+        XCTAssertTrue(coordinator.isFallbackPolling, "a channel that sent its initial frame dropped; poll through it")
+        withExtendedLifetime(delegate) {}
+    }
+
+    func testAChannelThatNeverOpenedIsRetriedOnAConnectivityChange() {
+        let (coordinator, stream, delegate) = makeCoordinator()
+        coordinator.startMonitoringIfIdle()
+        stream.emit(.transportError("The network connection was lost."))
+        XCTAssertFalse(coordinator.isMonitoring)
+
+        coordinator.reconnectIfIdle()
+
+        XCTAssertTrue(coordinator.isMonitoring)
+        XCTAssertEqual(stream.startedURLs.count, 2)
+        withExtendedLifetime(delegate) {}
+    }
+
+    func testAConnectivityChangeReplacesPollingWithTheChannel() async {
+        let (coordinator, stream, delegate) = makeCoordinator(
+            fallbackPollingIntervalNanoseconds: 10_000_000,
+            statusHandler: { _ in Self.statusBody(activeStreamID: nil, messageCount: 0) }
+        )
+        coordinator.startMonitoringIfIdle()
+        stream.emit(.heartbeat)
+        stream.emit(.transportError("socket reset"))
+        XCTAssertTrue(coordinator.isFallbackPolling)
+
+        coordinator.reconnectIfIdle()
+        XCTAssertFalse(coordinator.isFallbackPolling)
+        XCTAssertEqual(stream.startedURLs.count, 2)
+
+        // This server has opened the channel before, so a new subscription that
+        // drops before its first frame is a lost network: poll, don't give up.
+        stream.emit(.transportError("The network connection was lost."))
+        XCTAssertTrue(coordinator.isFallbackPolling)
+        withExtendedLifetime(delegate) {}
+    }
+
+    func testReconnectKeepsAHealthyOpenChannel() {
+        let (coordinator, stream, delegate) = makeCoordinator()
+        coordinator.startMonitoringIfIdle()
+        stream.emit(.heartbeat)
+
+        coordinator.reconnectIfIdle()
+
+        XCTAssertEqual(stream.startedURLs.count, 1)
+        XCTAssertEqual(stream.stopCount, 0)
+        withExtendedLifetime(delegate) {}
     }
 
     func testChannelThatNeverOpenedDoesNotPoll() async {
@@ -338,6 +467,10 @@ private final class ScriptedSessionChannelDelegate: ChatSessionChannelCoordinato
     var hasActiveStream = false
     var messageCount = 0
     var holdReload = false
+    /// Simulates a load that finds an active stream and attaches to it.
+    var attachesOnReload = false
+    /// Simulates a successful load that brings the transcript up to the server.
+    var messageCountAfterReload: Int?
     private(set) var reloadReasons: [ChatSessionChannelChangeReason] = []
     private var reloadStarted = 0
     private var release: CheckedContinuation<Void, Never>?
@@ -351,6 +484,8 @@ private final class ScriptedSessionChannelDelegate: ChatSessionChannelCoordinato
             await withCheckedContinuation { release = $0 }
         }
         reloadReasons.append(reason)
+        if attachesOnReload { hasActiveStream = true }
+        if let messageCountAfterReload { messageCount = messageCountAfterReload }
     }
 
     func releaseReload() {
@@ -363,6 +498,19 @@ private final class ScriptedSessionChannelDelegate: ChatSessionChannelCoordinato
         while reloadStarted == 0, Date() < deadline {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
+    }
+
+    func waitForReloads(_ count: Int, timeout: TimeInterval = 2) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while reloadReasons.count < count, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    /// Lets any reload already scheduled run to completion.
+    func settle() async {
+        for _ in 0..<5 { await Task.yield() }
+        try? await Task.sleep(nanoseconds: 30_000_000)
     }
 
     func waitForReload(timeout: TimeInterval = 2) async {

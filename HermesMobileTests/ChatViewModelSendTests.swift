@@ -10902,6 +10902,24 @@ final class ChatViewModelSendTests: XCTestCase {
         return userDefaults
     }
 
+    /// The session channel compares the server's message count with this one
+    /// (#1208). Slash-command output and notices exist only on this device, so
+    /// counting them would hide a reply the server added while disconnected.
+    @MainActor
+    func testSessionChannelKnownMessageCountSkipsLocalOnlyRows() throws {
+        let viewModel = try makeViewModel { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data("{}".utf8))
+        }
+        let before = viewModel.sessionChannelKnownMessageCount
+
+        viewModel.appendLocalAssistantMessage("Model: test")
+        viewModel.appendLocalNoticeMessage("Copied")
+
+        XCTAssertEqual(viewModel.messages.count, 2)
+        XCTAssertEqual(viewModel.sessionChannelKnownMessageCount, before)
+    }
+
     @MainActor
     private func makeViewModel(
         streamClient: SSEStreamingClient? = nil,
