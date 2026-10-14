@@ -52,8 +52,8 @@ struct HermesSessionListView: View {
     @Binding private var pendingLink: HermesSessionDestination?
     /// The new session a Shortcut asked for, held by `ContentView` until this list can open it.
     @Binding private var pendingNewChat: HermesNewChatDestination?
-    /// The share `ContentView` reserved, and how this list tells it the share is moving, open,
-    /// declined or cut short.
+    /// The share `ContentView` reserved, and how this list tells it the share is moving, let go
+    /// (opened, or discarded after it failed), kept queued or cut short.
     private let pendingShare: SharedImportReservation?
     private let claimShare: (SharedImportReservation) -> Bool
     private let didRouteShare: (SharedImportReservation) -> Void
@@ -61,6 +61,8 @@ struct HermesSessionListView: View {
     private let didAbandonShare: (SharedImportReservation) -> Void
     /// Moving `pendingShare` into its new session's draft; leaving cancels it.
     @State private var shareTransfer: Task<Void, Never>?
+    /// A share whose move failed, still claimed, until the user discards it or the alert closes (#1196).
+    @State private var failedShare: HermesShareFailure?
     @State private var viewModel: SessionListViewModel
     /// The chat, pushed screens, sheets and confirmations over the rows.
     @State private var covers = HermesSessionListCovers()
@@ -119,6 +121,7 @@ struct HermesSessionListView: View {
                     openSearch: openSearch
                 )
                 .sessionsTopChromeListRow()
+                MoveToHermesBanner(serverID: entry.server.absoluteString)
             }
             if viewModel.isViewingCachedData {
                 OfflineCacheBanner()
@@ -255,6 +258,20 @@ struct HermesSessionListView: View {
         } message: { move in
             Text(verbatim: move.message)
         }
+        // Discard is the only action: kept, the same files would fail the same way. The share stays
+        // claimed meanwhile; the alert closing any other way (a Cancel iOS adds, Escape, leaving)
+        // queues it again instead.
+        .alert("Couldn’t Add Shared Files",
+               isPresented: Binding(get: { failedShare != nil }, set: { if !$0 { queueFailedShareAgain() } }),
+               presenting: failedShare) { failure in
+            Button("Discard Share", role: .destructive) {
+                failedShare = nil
+                didRouteShare(failure.share)
+            }
+        } message: { failure in
+            Text(verbatim: failure.reason + "\n\n"
+                 + String(localized: "Nothing was added. Discard deletes this saved share from Hermex."))
+        }
         .modifier(SessionActionConfirmations(
             viewModel: viewModel, sessionPendingDeletion: $covers.deleting, projectPendingDeletion: $covers.deletingProject,
             deleteSession: { session in Task { await delete(session) } },
@@ -277,6 +294,7 @@ struct HermesSessionListView: View {
         .onDisappear {
             shareTransfer?.cancel()
             shareTransfer = nil
+            queueFailedShareAgain()
             actionToast.dismiss()
             if covers.chat == nil { viewModel.closeHermes() } else { viewModel.pauseHermes() }
         }
@@ -520,7 +538,8 @@ struct HermesSessionListView: View {
 
     /// Opens the session the held link names on this list's server (#1176), the way its row
     /// opens, over the rows it brings forward, or says why nothing opened: gone, or in more than one Profile. A room's session
-    /// opens nothing. A lookup that fails (an unreachable host, a store the host can't read) drops
+    /// opens nothing. A moved webui server's link that no Profile has opens on that webui server
+    /// instead (`MovedWebuiRoute.fallback`), never one whose lookup failed. A lookup that fails (an unreachable host, a store the host can't read) drops
     /// the link quietly, except a refused sign-in or a list that left mid-lookup: the server's
     /// sign-out or switch routes the held link again.
     private func openPendingLink() async {
@@ -549,6 +568,11 @@ struct HermesSessionListView: View {
                 covers.chat = opened
             }
         case .gone:
+            // A moved webui server's link opens on that server when no Profile here has it (#1217).
+            if let fallback = MovedWebuiRoute.fallback(for: link) {
+                AppIntentRouter.shared.requestDeepLink(fallback)
+                return
+            }
             let server = home?.title ?? entry.server.host ?? entry.server.absoluteString
             showLinkNotice(String(localized: "That chat is no longer on \(server)."))
         case .ambiguous:
@@ -565,8 +589,9 @@ struct HermesSessionListView: View {
 
     /// Opens a share (#1181) as a new session over whatever covers the rows, once `transfer` has
     /// moved it into that session's draft and let it go. The share is claimed for the move, so no
-    /// home, here or on another server, starts a second one. A transfer that fails keeps it queued
-    /// and says why; one cut short by leaving hands it back for the next try.
+    /// home, here or on another server, starts a second one. A transfer that fails stays claimed
+    /// and says why, offering Discard (#1196); closing the alert otherwise, or leaving, keeps it
+    /// queued. One cut short by leaving hands it back for the next try.
     private func openPendingShare() {
         guard shareTransfer == nil, let share = pendingShare,
               let opening = share.hermesOpening(on: entry, listed: profile, isLive: viewModel.isHermesLive) else {
@@ -576,7 +601,7 @@ struct HermesSessionListView: View {
         guard claimShare(share) else { return }
         shareTransfer = Task {
             do {
-                try await share.transfer(into: chat, route: didRouteShare, decline: didDeclineShare)
+                try await share.transfer(into: chat, route: didRouteShare)
                 if !Task.isCancelled {
                     covers.bringForward()
                     covers.chat = chat
@@ -584,13 +609,23 @@ struct HermesSessionListView: View {
             } catch is CancellationError {
                 didAbandonShare(share)
             } catch {
-                if !Task.isCancelled {
-                    showLinkNotice((error as? BotAttachmentFailure)?.localizedDescription
-                                   ?? String(localized: "Could not save the attachment on this device."))
+                if Task.isCancelled {
+                    didDeclineShare(share)
+                } else {
+                    covers.bringForward()
+                    failedShare = HermesShareFailure(share: share, error: error)
                 }
             }
             if !Task.isCancelled { shareTransfer = nil }
         }
+    }
+
+    /// Hands back a failed share the user didn't discard, so it is offered again next time.
+    /// Discard clears `failedShare` first, so the alert's dismissal after it does nothing.
+    private func queueFailedShareAgain() {
+        guard let failedShare else { return }
+        self.failedShare = nil
+        didDeclineShare(failedShare.share)
     }
 
     private func showLinkNotice(_ message: String) {
@@ -679,16 +714,10 @@ extension SharedImportReservation {
 
     /// Moves the share into `chat`'s draft, then lets it go with `route` (`ContentView` consumes
     /// it), even when the caller was cancelled after the draft took it: the draft owns it from then
-    /// on. A failure keeps it queued with `decline` and rethrows; a cancellation before the draft
-    /// took it rethrows and keeps it reserved for the next try.
+    /// on. A failure rethrows and leaves the share reserved, for the caller to discard or queue.
     @MainActor func transfer(into chat: HermesSessionChat, drafts: ChatDraftStore = .shared,
-                             route: (Self) -> Void, decline: (Self) -> Void) async throws {
-        do {
-            try await moveIntoDraft(of: chat, drafts: drafts)
-        } catch {
-            if !(error is CancellationError) { decline(self) }
-            throw error
-        }
+                             route: (Self) -> Void) async throws {
+        try await moveIntoDraft(of: chat, drafts: drafts)
         route(self)
     }
 
@@ -696,13 +725,14 @@ extension SharedImportReservation {
     /// any unsent text, its files after any staged ones, each as a Hermes send takes it
     /// (`BotAttachmentUpload.prepare`, Bot Chat's limits). A file Hermes can't take now (its type or
     /// size, an unreadable image, no room left in the draft) throws its reason and moves nothing, so the
-    /// whole share stays recoverable. Once it returns the draft owns the share, under its item id,
-    /// so a retry or replay adds nothing; a throw leaves the draft as it was.
+    /// whole share stays recoverable. Once it returns the draft owns the share, under its occurrence
+    /// id, so a retry or replay adds nothing while the same content shared again later is added;
+    /// a throw leaves the draft as it was.
     @MainActor func moveIntoDraft(of chat: HermesSessionChat, drafts: ChatDraftStore = .shared) async throws {
         let key = chat.target.draftKey(server: chat.server, connectionID: chat.connection.id, lineageRoot: chat.lineageRoot)
         let draft = await drafts.draft(for: key)
         var files: [(data: Data, name: String, mime: String, image: Bool)] = []
-        if draft?.sharedImportIDs.contains(itemID) != true {
+        if draft?.sharedImportIDs.contains(occurrenceID) != true {
             let staged = draft?.attachments ?? []
             var room = HermexAttachmentPickerPolicy.maximumBotAttachments - staged.count
             var bytes = staged.reduce(0) { $0 + ($1.size ?? BotAttachmentUpload.maximumFileBytes) }
@@ -725,12 +755,35 @@ extension SharedImportReservation {
             }
             try Task.checkCancellation()
         }
-        try await drafts.appendShare(itemID, text: HermesShareDraft.composerDraft(from: sharedImport.draft), files: files,
+        try await drafts.appendShare(occurrenceID, text: HermesShareDraft.composerDraft(from: sharedImport.draft), files: files,
                                      to: key, maximumFileBytes: BotAttachmentUpload.maximumFileBytes) { attachments in
             // A composer open on this draft may have added files since the check above.
             guard attachments.count <= HermexAttachmentPickerPolicy.maximumBotAttachments,
                   attachments.reduce(0, { $0 + ($1.size ?? BotAttachmentUpload.maximumFileBytes) })
                     <= BotAttachmentUpload.maximumTotalBytes else { throw BotAttachmentFailure.limit }
+        }
+    }
+}
+
+/// A share the Hermes home couldn't move into a new session's draft (#1196), and why, in words for
+/// someone who shared from another app. Nothing in a queued share can be changed, so most failures
+/// would repeat on every try; the user discards it and shares again.
+struct HermesShareFailure {
+    let share: SharedImportReservation
+    let reason: String
+
+    init(share: SharedImportReservation, error: Error) {
+        self.share = share
+        switch error {
+        case BotAttachmentFailure.limit, ChatDraftStorageError.attachmentLimit:
+            // Counts the files already waiting in the new session's draft too.
+            reason = String(localized: "You can attach up to 8 files per message, 25 MB each and 50 MB total. Share fewer or smaller files and try again.")
+        case BotAttachmentFailure.type:
+            reason = String(localized: "One of these file types isn’t supported. Share supported files separately.")
+        case BotAttachmentFailure.unreadable:
+            reason = String(localized: "One of the files couldn’t be read.")
+        default:
+            reason = String(localized: "Hermex couldn’t save the files on this iPhone.")
         }
     }
 }

@@ -602,7 +602,6 @@ final class AuthManagerStateTests: XCTestCase {
         preferences: UserDefaults = .ephemeral(),
         forgetPush: @escaping @MainActor (URL) async -> Void = { _ in }
     ) async throws -> AuthManager {
-        preferences.set(true, forKey: BotModeGate.isEnabledKey)
         let manager = AuthManager(
             keychain: keychain,
             clientFactory: { _ in MockAuthAPIClient(authStatus: AuthStatusResponse(authEnabled: false)) },
@@ -823,23 +822,19 @@ final class AuthManagerStateTests: XCTestCase {
 
     // MARK: - Adding a Hermes server from the connect form (#900)
 
-    /// A manager with Bot Mode on whose webui double answers without auth.
+    /// A manager with Bot Mode (beta) off, which adding a Hermes server never needs (#712),
+    /// whose webui double answers without auth.
     private func makeFormManager(keychain: InMemoryKeychainStore, headerStore: CustomHeaderStore = CustomHeaderStore()) -> AuthManager {
-        let preferences = UserDefaults.ephemeral()
-        preferences.set(true, forKey: BotModeGate.isEnabledKey)
         let webui = MockAuthAPIClient(authStatus: AuthStatusResponse(authEnabled: false))
         return AuthManager(keychain: keychain, clientFactory: { _ in webui }, probeClientFactory: { _, _ in webui },
                            headerStore: headerStore, serverRegistry: ServerRegistry.inMemory(keychain: keychain),
-                           hermesConnections: HermesConnections(), preferences: preferences)
+                           hermesConnections: HermesConnections(), preferences: .ephemeral())
     }
 
-    /// The connect form for `entry` with Bot Mode on, against the scripted Hermes host.
+    /// The connect form for `entry` against the scripted Hermes host.
     private func makeForm(entry: OnboardingViewModel.Entry,
                           host script: @escaping (URLRequest) -> HermesHostFixture.Reply? = { _ in nil }) -> OnboardingViewModel {
-        let preferences = UserDefaults.ephemeral()
-        preferences.set(true, forKey: BotModeGate.isEnabledKey)
-        return OnboardingViewModel(entry: entry, preferences: preferences,
-                                   hermesConfiguration: { HermesHostFixture.configuration(script) })
+        OnboardingViewModel(entry: entry, hermesConfiguration: { HermesHostFixture.configuration(script) })
     }
 
     func testTheConnectFormAddsAHermesServerFromOnboardingAndFromAddServer() async throws {
@@ -872,6 +867,40 @@ final class AuthManagerStateTests: XCTestCase {
             XCTAssertEqual(HermesHostFixture.count("/auth/password-login"), 1, "\(entry): one sign-in")
             XCTAssertTrue(headers.snapshot().isEmpty, "\(entry): the webui's headers never go to a Hermes server")
         }
+    }
+
+    /// Move to Hermes's host choice (#1218): the form checks the dashboard sign-in and hands it
+    /// back, saving, adding and activating nothing; a webui address is refused.
+    func testTheMoveDestinationFormOnlyChecksAHermesSignIn() async throws {
+        defer { HermesHostFixture.reset() }
+        HermesHostFixture.reset()
+        let keychain = InMemoryKeychainStore()
+        let manager = makeFormManager(keychain: keychain)
+        await manager.configure(serverURLString: webuiServer.absoluteString, password: "")
+        let form = makeForm(entry: .moveDestination)
+        form.serverURLString = "hermes.example"
+        let found = await form.connect(authManager: manager)
+        XCTAssertNil(found, "The first Connect only finds the dashboard")
+        form.username = "me"
+        form.password = "secret"
+
+        let checked = await form.connect(authManager: manager)
+
+        XCTAssertEqual(checked, hermesServer)
+        let verified = try XCTUnwrap(form.verifiedConnection)
+        XCTAssertEqual(verified.username, "me")
+        XCTAssertEqual(verified.hermesVersion, "0.21.5")
+        XCTAssertEqual(manager.state, .loggedIn(server: webuiServer), "Nothing is activated")
+        XCTAssertFalse(manager.servers.contains { $0.id == hermesServer.absoluteString }, "Nothing is added")
+        XCTAssertNil(try BotConnectionStore(keychain: keychain).load(server: hermesServer), "Nothing is saved")
+
+        HermesHostFixture.reset()
+        let webuiForm = makeForm(entry: .moveDestination) { $0.url?.path == "/api/status" ? .json(404, .object([:])) : nil }
+        webuiForm.serverURLString = "webui.example:8787"
+        let refused = await webuiForm.connect(authManager: manager)
+        XCTAssertNil(refused)
+        XCTAssertNotNil(webuiForm.errorMessage, "Only a Hermes dashboard can be a destination")
+        XCTAssertEqual(manager.servers.count, 1)
     }
 
     func testASavedSignInIsOfferedOnlyAtExactlyTheSameAddress() async throws {
@@ -1062,7 +1091,6 @@ final class AuthManagerStateTests: XCTestCase {
         defer { HermesHostFixture.reset() }
         let keychain = InMemoryKeychainStore()
         let preferences = UserDefaults.ephemeral()
-        preferences.set(true, forKey: BotModeGate.isEnabledKey)
         let webui = MockAuthAPIClient(authStatus: AuthStatusResponse(authEnabled: true, loggedIn: false))
         let manager = AuthManager(keychain: keychain, clientFactory: { _ in webui }, probeClientFactory: { _, _ in webui },
                                   headerStore: CustomHeaderStore(), serverRegistry: ServerRegistry.inMemory(keychain: keychain),

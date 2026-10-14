@@ -65,8 +65,13 @@ final class AuthManager {
     /// the Settings server list updates reactively (#17). The active server is the
     /// one whose `id` matches `state.server?.absoluteString`.
     private(set) var servers: [ServerAccount] = []
+    /// Servers `removeServer` is part way through removing. A Move to Hermes runner treats its
+    /// destination as gone from the start, before the removal's first await (#1216).
+    @ObservationIgnored private(set) var removingServerIDs: Set<String> = []
 
-    private let keychain: any KeychainStoring
+    // `keychain`, `serverRegistry` and `refreshServers` are internal for
+    // `AuthManager+MoveToHermes`; nothing outside this type and that extension uses them.
+    let keychain: any KeychainStoring
     private let clientFactory: (URL) -> any AuthAPIClient
     /// Builds a client bound to explicit headers (not the shared `CustomHeaderStore`)
     /// — used by `addServer` to probe a new server without disturbing the active
@@ -74,9 +79,9 @@ final class AuthManager {
     private let probeClientFactory: (URL, [CustomHeader]) -> any AuthAPIClient
     private let headerStore: CustomHeaderStore
     private let logoutTimeout: Duration
-    private let serverRegistry: ServerRegistry
+    let serverRegistry: ServerRegistry
     private let hermesConnections: HermesConnections
-    /// Where the Bot Mode gate is read (`BotModeGate`), which adding a Hermes server needs.
+    /// Where a removed server's Profile choice is cleared (`HermesProfilePreference`).
     private let preferences: UserDefaults
     /// Tears down a server's push pairing when it is signed out of or removed.
     private let forgetPush: @MainActor (URL) async -> Void
@@ -123,7 +128,7 @@ final class AuthManager {
 
     /// Re-reads the registry into the observable `servers` snapshot. Called after
     /// every registry mutation routed through this manager.
-    private func refreshServers() {
+    func refreshServers() {
         servers = serverRegistry.servers
     }
 
@@ -306,14 +311,13 @@ final class AuthManager {
 
     /// Adds (and switches to) a Hermes server (#899): `connection` is a sign-in the
     /// connection form or dev sign-in has already verified, and becomes the server's own
-    /// record, saved under its address, which is also the server's id. Needs Bot Mode on
-    /// (`BotModeGate`); refuses an address already in the registry, as `addServer` does, so
-    /// a webui server and a Hermes server never share a URL (`replaceWebuiServer` swaps
-    /// one for the other). Returns whether it was added.
+    /// record, saved under its address, which is also the server's id. Refuses an address
+    /// already in the registry, as `addServer` does, so a webui server and a Hermes server
+    /// never share a URL (`replaceWebuiServer` swaps one for the other). Returns whether it
+    /// was added.
     @discardableResult
     func addHermesServer(_ connection: BotConnection) -> Bool {
         lastErrorMessage = nil
-        guard BotModeGate.isEnabled(in: preferences) else { return false }
         let server = (try? BotConnection.address(connection.address.absoluteString)) ?? connection.address
         guard !serverRegistry.servers.contains(where: { $0.id == server.absoluteString }) else {
             lastErrorMessage = String(localized: "This server is already configured.")
@@ -342,7 +346,6 @@ final class AuthManager {
     /// whether the Hermes server was added.
     func replaceWebuiServer(with connection: BotConnection) async -> Bool {
         lastErrorMessage = nil
-        guard BotModeGate.isEnabled(in: preferences) else { return false }
         let server = (try? BotConnection.address(connection.address.absoluteString)) ?? connection.address
         guard let webui = servers.first(where: { $0.id == server.absoluteString }), webui.kind == .webui else {
             lastErrorMessage = String(localized: "This server is already configured.")
@@ -481,6 +484,10 @@ final class AuthManager {
     /// headers, and cookies — leaving the active server's auth untouched (#17).
     func removeServer(_ account: ServerAccount) async {
         guard let serverURL = URL(string: account.urlString) else { return }
+        removingServerIDs.insert(account.id)
+        defer { removingServerIDs.remove(account.id) }
+        // A move committed during the awaits below leaves an orphan journal, which `MoveToHermesPending.all` deletes.
+        let movedSources = (servers.first { $0.id == account.id } ?? account).movedWebuiServers.map(\.sourceServerID)
         try? await BotHistoryCache.shared.removeServer(serverURL, activeConnectionID: (try? BotConnectionStore(keychain: keychain).load(server: serverURL))?.id)
         SessionUnreadStore().remove(for: serverURL)
         // Kept through a sign-out, which the Shortcuts picker still lists the server's Profiles across (#1180).
@@ -499,6 +506,8 @@ final class AuthManager {
             serverRegistry.remove(id: account.id)
             refreshServers()
         }
+        // After the entry is gone, so a running Move finds no record and writes nothing more (#1216).
+        MoveToHermesJournal.discard(sources: movedSources, destinationID: account.id)
     }
 
     /// Switches the active server to an already-registered one (the Settings
