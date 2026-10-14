@@ -485,6 +485,7 @@ struct ChatView: View {
             backend: hermesSession.map { .hermes(HermesChatTurnCoordinator($0)) } ?? .webui
         )
         model.hermesBotChatRoot = hermesSession?.botChatRoot
+        model.hermesLineageRoot = hermesSession?.lineageRoot
         _viewModel = State(initialValue: model)
         _gitAvailabilityViewModel = State(initialValue: GitWorkspaceAvailabilityViewModel(
             session: session,
@@ -496,13 +497,15 @@ struct ChatView: View {
     /// reaches the webui API; connection errors show in the chat itself. A bot's Bot Chat
     /// (#1145) shows the bot's pill in place of the title, keeps Bot Chat's rules
     /// (`HermesChatPolicy`) and calls `onChatReplaced` when its linked root was replaced. Update
-    /// sign-in goes through the environment's `HermesUpdateSignInAction`.
+    /// sign-in goes through the environment's `HermesUpdateSignInAction`. New Chat with Voice's
+    /// chat (#1180) starts dictation.
     init(hermesSession: HermesSessionChat, onReplace: ((HermesSessionChat) -> Void)? = nil,
          onOpenSessions: ((HermesSessionListEntry) -> Void)? = nil, onChatReplaced: (() -> Void)? = nil) {
         self.init(
             session: SessionSummary(profile: hermesSession.target.profile),
             server: hermesSession.server,
             onAPIError: { _ in },
+            autoStartsVoiceInput: hermesSession.autoStartsVoiceInput,
             hermesSession: hermesSession,
             onReplaceHermesSession: onReplace,
             onOpenHermesSessions: onOpenSessions,
@@ -2892,6 +2895,7 @@ struct ChatView: View {
     private func hydrateDraftIfNeeded() async {
         viewModel.protectDraftAttachments(for: draftKey)
         guard !didHydrateDraft else { return }
+        await viewModel.adoptHermesSegmentDraft()
         await draftStore.markUsed(draftKey)
         let textBeforeHydration = draftMessage
         let quotesBeforeHydration = draftQuotes
@@ -3019,7 +3023,8 @@ struct ChatView: View {
     /// Restored records whose re-upload failed are unioned back in so a
     /// mid-restore or post-restore sync can't silently drop them. Gated during
     /// hydration/restore so an empty or partial composer never overwrites the
-    /// persisted set.
+    /// persisted set. Records this composer never saw (a share moved in, #1181)
+    /// stay in the draft.
     private func syncDraftAttachments() {
         guard didHydrateDraft, !isRestoringDraftAttachments else { return }
         // Only records backed by a durable copy are persisted. Without one the
@@ -3032,8 +3037,8 @@ struct ChatView: View {
             !pendingRecords.contains(where: { $0.id == retry.id })
         }
         let records = pendingRecords + retryRecords
+        draftStore.setAttachments(records, replacing: lastSyncedDraftAttachments, for: draftKey)
         lastSyncedDraftAttachments = records
-        draftStore.setAttachments(records, for: draftKey)
     }
 
     /// Snapshots the effective composer settings into the draft whenever they
@@ -3107,6 +3112,8 @@ struct ChatView: View {
         // Not the user's edit, but a send still in flight must not clear it.
         draftRevision &+= 1
         draftMessage = parked.text
+        // The composer now knows the parked files, so removing one sticks.
+        lastSyncedDraftAttachments = parked.attachments
         viewModel.appendPendingAttachments(queued.flatMap(\.attachments))
     }
 
@@ -3615,6 +3622,7 @@ struct ChatView: View {
         let outcome = viewModel.runEndOutcome
         let runEndTrigger = viewModel.runEndTrigger
         let completion = viewModel.successfulResponseCompletion
+        let hermesLink = viewModel.hermesSessionLink
 
         Task { @MainActor in
             if outcome == .completed, completion?.needsTranscriptRefresh == true {
@@ -3628,7 +3636,8 @@ struct ChatView: View {
             }
             await ResponseCompletionNotificationService.scheduleRunEndedIfAllowed(
                 outcome,
-                sessionID: session.sessionId,
+                sessionID: hermesLink?.key ?? session.sessionId,
+                hermesProfile: hermesLink?.profile,
                 title: viewModel.displayTitle,
                 server: server,
                 preferenceEnabled: isResponseCompletionNotificationsEnabled,

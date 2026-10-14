@@ -247,6 +247,34 @@ import SwiftUI
                        "returning resumed the created session")
     }
 
+    /// A legacy compression chain keeps one draft whichever segment opened it (#1176): its list
+    /// row (the tip) and links to its root or middle restore and edit the same draft, under the
+    /// chain's root, while each resumes the key it named. A draft the tip kept before drafts
+    /// followed the root moves to it.
+    func testEverySegmentOfACompressionChainSharesOneDraft() async {
+        let drafts = ChatDraftStore(persistence: InMemoryDraftPersistence(), debounceDuration: .seconds(60))
+        let server = URL(string: "https://hermes.example")!
+        func draftKey(_ key: String) -> ChatDraftKey {
+            .hermesSession(server: server, connectionID: Self.connection.id, profile: "default", key: key)
+        }
+        drafts.setDraft("Ship the notes", for: draftKey("tip"))
+
+        var expected = "Ship the notes"
+        for segment in ["tip", "middle", "root"] {
+            let chat = await openChat(key: segment, drafts: drafts, lineageRoot: "root")
+            await chat.model.adoptHermesSegmentDraft()
+            XCTAssertEqual(chat.model.hermesDraftKey, draftKey("root"), segment)
+            let restored = await drafts.draft(for: draftKey("root"))
+            XCTAssertEqual(restored?.text, expected, segment)
+            XCTAssertEqual(Set(chat.writes("session.resume").compactMap { $0["session_id"]?.text }), [segment])
+            expected = "Ship the notes from \(segment)"
+            drafts.setDraft(expected, for: draftKey("root"))
+            chat.model.suspendStreamForNavigation()
+        }
+        let tip = await drafts.draft(for: draftKey("tip"))
+        XCTAssertNil(tip, "moved, not copied")
+    }
+
     func testAcceptedSteerShowsItsEchoAndARefusedOneKeepsTheDraftAndTheRun() async {
         let chat = await openChat()
         chat.receive(event(1, "message.start"))
@@ -354,7 +382,11 @@ import SwiftUI
         chat.host.always("prompt.submit", .init(result: .object(["status": .string("streaming")])))
         let sent = await chat.model.sendMessage("Are you there?")
         XCTAssertFalse(sent)
-        XCTAssertEqual(chat.host.requests.count, before, "nothing reattached or sent")
+        // The first attach's goal, model-catalog, Profile, command-catalog and worker reads run off
+        // its path and can land after `before`; they are not a reattach.
+        let methods = chat.host.requests.dropFirst(before).compactMap { $0["method"].text }
+        XCTAssertEqual(methods.filter { !["session.control.read", "model.options", "profiles.list", "commands.catalog",
+                                          "subagent.list"].contains($0) }, [], "nothing reattached or sent")
         XCTAssertEqual(chat.turn.engine.connectionState, .disconnected)
     }
 
@@ -598,6 +630,57 @@ import SwiftUI
                             held: [event(7, "message.delta", ["text": .string(" ha")]),
                                    event(8, "message.delta", ["text": .string(" ha")])],
                             shows: "Hello there. ha ha ha")
+    }
+
+    // MARK: Reclaim
+
+    /// The host reaps the idle chat's runtime and says so (#1122): the chat reattaches once,
+    /// only reading, and the next send goes out on the new runtime on the first try.
+    func testAReclaimedRuntimeReattachesAndTheNextSendGoesOut() async {
+        let chat = await openChat()
+        let leaving = chat.host.requests.count
+        await reclaim(chat, reclaimed(runtime: "runtime", key: "tip"))
+        XCTAssertEqual(socketReads(chat, since: leaving), ["session.resume", "session.events.since", "session.resume"],
+                       "one reattach, which only reads")
+
+        chat.host.always("prompt.submit", .init(result: .object(["status": .string("streaming")])))
+        let sent = await chat.model.sendMessage("Check the deploy")
+        XCTAssertTrue(sent)
+        XCTAssertNil(chat.model.sendErrorMessage)
+        XCTAssertEqual(chat.writes("prompt.submit").map { $0["session_id"] }, [.string("runtime-2")])
+    }
+
+    /// A reclaim that names only the stored key, as for a runtime this chat never held, still
+    /// reattaches.
+    func testAReclaimOfTheStoredKeyReattaches() async {
+        let chat = await openChat()
+        let leaving = chat.host.requests.count
+        await reclaim(chat, reclaimed(runtime: "another-runtime", key: "tip"))
+        XCTAssertEqual(socketReads(chat, since: leaving), ["session.resume", "session.events.since", "session.resume"])
+    }
+
+    /// Another session's reclaim reaches every chat on the socket and changes nothing here.
+    func testAnotherSessionsReclaimIsIgnored() async {
+        let chat = await openChat()
+        let leaving = chat.host.requests.count
+        chat.receive(reclaimed(runtime: "another-runtime", key: "another-key"))
+        XCTAssertEqual(chat.turn.engine.connectionState, .connected)
+        XCTAssertEqual(chat.turn.engine.runtime, "runtime")
+        XCTAssertEqual(chat.host.requests.count, leaving, "nothing read or sent")
+    }
+
+    /// A reclaim mid-turn is a lost stream: the reattach's snapshot settles the turn, and no
+    /// spinner is left waiting on the reaped runtime.
+    func testAReclaimMidTurnEndsInTheRecoveryState() async {
+        let chat = await openChat()
+        chat.receive(event(1, "message.start"))
+        chat.receive(event(2, "message.delta", ["text": .string("Working on")]))
+        XCTAssertNotNil(chat.model.activeStreamID)
+        await reclaim(chat, reclaimed(runtime: "runtime", key: "tip"))
+        XCTAssertNil(chat.model.activeStreamID, "the idle snapshot ends the turn")
+        XCTAssertNotNil(chat.model.latestRunOutcome)
+        XCTAssertEqual(chat.turn.recoveryState, .idle)
+        XCTAssertEqual(chat.writes("prompt.submit").count, 0, "nothing resends")
     }
 
     /// The new session runs under the Profile the dashboard is scoped to (`current`), not the
@@ -1038,7 +1121,7 @@ import SwiftUI
         + "[Examine it with the vision_analyze tool using image_url: /home/u/.hermes/images/dashboard_20261005_120000_0123abcd_IMG_2041.jpg]"
 
     private func openChat(runtime: String = "runtime", key: String = "tip", profile: String = "default",
-                          target: ConversationTarget? = nil, drafts: ChatDraftStore? = nil,
+                          target: ConversationTarget? = nil, drafts: ChatDraftStore? = nil, lineageRoot: String? = nil,
                           history: [BotJSON] = [], snapshot: BotJSON? = nil, subagents: [BotJSON] = [],
                           rpcDeadline: Duration = .seconds(30)) async -> Chat {
         addTeardownBlock { HermesHostFixture.reset() }
@@ -1055,7 +1138,7 @@ import SwiftUI
         serveHistory(history, key: key)
         let engine = HermesConversation(server: URL(string: "https://hermes.example")!, connection: Self.connection,
                                         target: target ?? .session(profile: profile, key: key), wire: client)
-        let turn = HermesChatTurnCoordinator(engine: engine, isNetworkAvailable: { true })
+        let turn = HermesChatTurnCoordinator(engine: engine, lineageRoot: lineageRoot, isNetworkAvailable: { true })
         let liveActivity = TitleRecordingLiveActivity()
         let model = ChatViewModel(
             session: SessionSummary(profile: profile), server: URL(string: "https://hermes.example")!,
@@ -1102,6 +1185,30 @@ import SwiftUI
         chat.host.always("session.resume", .init(result: snapshot))
         await chat.model.reconnectStreamIfNeeded()
         XCTAssertEqual(chat.turn.engine.connectionState, .connected)
+    }
+
+    /// The host's `session.reclaimed` broadcast as the gateway delivers it: a session-less
+    /// event naming both ids in its payload.
+    private func reclaimed(runtime: String, key: String) -> BotJSON {
+        .object(["type": .string("session.reclaimed"), "session_id": .string(""),
+                 "payload": .object(["session_id": .string(runtime), "stored_session_id": .string(key),
+                                     "reason": .string("idle_timeout")])])
+    }
+
+    /// Feeds `frame` and waits for the reattach to land on the replacement runtime the host
+    /// resumes, idle.
+    private func reclaim(_ chat: Chat, _ frame: BotJSON) async {
+        chat.host.always("session.resume", .init(result: resume(running: false, runtime: "runtime-2")))
+        chat.receive(frame)
+        await waitUntil("reattached") {
+            chat.turn.engine.connectionState == .connected && chat.turn.engine.runtime == "runtime-2"
+        }
+    }
+
+    /// The socket calls since `index`, without the reads each attach makes off its path.
+    private func socketReads(_ chat: Chat, since index: Int) -> [String] {
+        chat.host.requests.dropFirst(index).compactMap { $0["method"].text }
+            .filter { !["session.control.read", "model.options", "profiles.list", "commands.catalog", "subagent.list"].contains($0) }
     }
 
     /// Feeds a turn through seq 3, then `frame`, which breaks the order: the chat reattaches,

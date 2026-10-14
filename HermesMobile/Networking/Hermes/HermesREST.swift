@@ -72,6 +72,9 @@ import Foundation
 /// 60 KB; an import answers `{ok, imported, skipped, detached, imported_ids, skipped_ids, errors}`,
 /// skips an id the Profile has, refuses a payload with 400 `{detail: {errors}}` before writing
 /// anything, and answers 413 past 25 MB.
+/// Move to Hermes's scan listing (#1213) is read at the same pin: `limit` is at most 100, every
+/// page also back-fills every pinned row it missed, hidden rows are left out, and `total` counts
+/// the rows the scope matches, so paging ends at `total`, never at a short page.
 enum HermesREST: Equatable, Sendable {
     /// The most rows `GET /api/sessions` lists in one page.
     static let sessionPageSize = 100
@@ -99,8 +102,10 @@ enum HermesREST: Equatable, Sendable {
     /// One recording for `profile`'s speech-to-text: `dataURL` is base64 of up to 25 MiB of
     /// audio, and `mimeType` an `audio/*` type.
     case transcribe(profile: String, dataURL: String, mimeType: String)
-    /// One session-scoped file download. `path` is checked against the address.
-    case downloadArtifact(path: String, profile: String, sessionID: String)
+    /// One file download. `path` is checked against the address. With a session the host
+    /// resolves a relative path against that stored session's folder; without one, `path` must
+    /// be absolute, which works before the host has stored the session.
+    case downloadArtifact(path: String, profile: String, sessionID: String?)
     /// Writes one managed environment value at the host root.
     case setEnvironment(key: String, value: String)
     /// Installs an agent plugin, reinstalling over an existing copy.
@@ -123,6 +128,11 @@ enum HermesREST: Equatable, Sendable {
     /// reads the Archived screen's page instead (#1048): only archived rows, hidden Bot Chats
     /// included, plus the same pinned back-fill.
     case sessionList(profile: String, offset: Int, archived: Bool = false)
+    /// One page of every session `profile` lists for Move to Hermes's scan (#1213): archived,
+    /// empty and machine-run rows included, newest-created first. A session made or deleted
+    /// mid-scan shifts later pages, so a row can repeat or slip past; the scan reads any id it
+    /// didn't list by that id.
+    case sessionScan(profile: String, offset: Int)
     /// One change to a session, with `profile` in the body (#1046, #1048).
     case updateSession(key: String, profile: String, change: HermesSessionChange)
     /// That exact session's row and every message, unredacted, as one JSON object (#1048).
@@ -317,13 +327,15 @@ enum HermesREST: Equatable, Sendable {
             return try Self.send("POST", try Self.url(base, "api/audio/transcribe", profile: profile),
                                  ["data_url": .string(dataURL), "mime_type": .string(mimeType)])
         case .downloadArtifact(let path, let profile, let sessionID):
-            guard !profile.isEmpty, !sessionID.isEmpty else { throw BotArtifactFailure.invalidReference }
+            guard !profile.isEmpty, sessionID?.isEmpty != true else { throw BotArtifactFailure.invalidReference }
             let path = try BotArtifactReference.path(path, address: base)
-            var parts = URLComponents(url: base.appendingPathComponent("api/fs/download"), resolvingAgainstBaseURL: false)
-            parts?.queryItems = [URLQueryItem(name: "path", value: path),
-                                 URLQueryItem(name: "profile", value: profile),
-                                 URLQueryItem(name: "session_id", value: sessionID)]
-            guard let url = parts?.url else { throw BotArtifactFailure.invalidReference }
+            guard var parts = URLComponents(url: base.appendingPathComponent("api/fs/download"), resolvingAgainstBaseURL: false)
+            else { throw BotArtifactFailure.invalidReference }
+            parts.queryItems = [URLQueryItem(name: "path", value: path), URLQueryItem(name: "profile", value: profile)]
+                + (sessionID.map { [URLQueryItem(name: "session_id", value: $0)] } ?? [])
+            // The host reads a query's `+` as a space; a path keeps its own.
+            parts.percentEncodedQuery = parts.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+            guard let url = parts.url else { throw BotArtifactFailure.invalidReference }
             var request = URLRequest(url: url)
             request.cachePolicy = .reloadIgnoringLocalCacheData
             return request
@@ -370,6 +382,17 @@ enum HermesREST: Equatable, Sendable {
                 URLQueryItem(name: "limit", value: String(Self.sessionPageSize)), URLQueryItem(name: "offset", value: String(offset))
             ] + (archived ? [] : [URLQueryItem(name: "min_messages", value: "1")]) + [
                 URLQueryItem(name: "exclude_sources", value: "cron,kanban,oneshot,subagent,tool")
+            ]
+            guard let url = parts.url else { throw BotFailure.invalidAddress }
+            return Self.get(url)
+        case .sessionScan(let profile, let offset):
+            guard !profile.isEmpty, offset >= 0,
+                  var parts = URLComponents(url: base.appendingPathComponent("api/sessions"), resolvingAgainstBaseURL: false)
+            else { throw BotFailure.invalidAddress }
+            parts.queryItems = [
+                URLQueryItem(name: "profile", value: profile), URLQueryItem(name: "order", value: "created"),
+                URLQueryItem(name: "archived", value: "include"),
+                URLQueryItem(name: "limit", value: String(Self.sessionPageSize)), URLQueryItem(name: "offset", value: String(offset))
             ]
             guard let url = parts.url else { throw BotFailure.invalidAddress }
             return Self.get(url)

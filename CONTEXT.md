@@ -5,16 +5,36 @@ Canonical language for Hermex concepts that need consistent names across the pro
 ## Servers
 
 **Webui server**:
-A configured `hermes-webui` server. Hermex signs in to it with its password and cookie, and it opens on the session list.
+A configured `hermes-webui` server, shown as **Legacy**. It keeps working and gets fixes only; new features come to Hermes servers, and Move to Hermes switches it over. Hermex signs in to it with its password and cookie, and it opens on the session list.
 _Avoid_: server (alone, when the kind matters), WebUI
 
 **Hermes server**:
-A configured Hermes dashboard that Hermex reaches directly. Its sign-in is its own Hermes connection, and it opens on the Bots inbox.
+A configured Hermes dashboard that Hermex reaches directly, and the default kind when adding a server. Its sign-in is its own Hermes connection, and it opens on the Bots inbox.
 _Avoid_: Hermes connection (that is the sign-in), bot server
 
 **Connection mode**:
 How this iPhone reaches the server, chosen in the connect form: Same Wi-Fi, Private network or Cloudflare Tunnel. It changes only the form's placeholder, help and header rows, and is not saved.
 _Avoid_: network type, connection type
+
+**Move to Hermes**:
+Copying a webui server's chats to a Hermes server and routing its old links, Shortcuts and notifications there. The webui server stays configured and usable, marked **Moved**, until the user removes it.
+_Avoid_: migration (in UI copy), import
+
+**Destination**:
+The Hermes server a webui server moved to. It holds the move's record, so old entry points keep working after the webui server is removed, and stop when the destination is removed.
+
+**Keep on webui**:
+A webui Profile the user chose not to move. Its chats stay on the webui server, and its Shortcuts keep opening there while it is configured.
+
+**Copy Missing Chats Again**:
+A later pass that scans the webui server again and copies only chats the destination still lacks. It doesn't finish titles, pins, folders or drafts for chats already in Hermes.
+
+**Finish with What's Done**:
+Ends a paused move without retrying the rest. Nothing in Hermes is undone; what stayed behind is reported.
+
+**Unchecked**:
+A chat the move couldn't confirm is in Hermes or missing from it. Never counted as missing, and never as copied.
+_Avoid_: missing, failed
 
 ## Kanban
 

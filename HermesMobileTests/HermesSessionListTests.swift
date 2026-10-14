@@ -450,6 +450,77 @@ import Observation
         XCTAssertEqual(list.visibleSessions(searchText: "nimbus", selectedProjectID: nil).compactMap(\.sessionId), ["far"])
     }
 
+    // MARK: Shortcuts
+
+    /// A Shortcut's new chat that names its Profile still waits for the list's first live read
+    /// (#1180): on a cold launch the list hasn't reached the host yet, and it may not.
+    func testANamedProfilesNewChatWaitsForTheListsFirstLiveRead() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: page([HermesSessionRow(id: "a")])]
+        let list = makeList(wire)
+        let entry = HermesSessionListEntry(server: server, connection: connection, profile: "default")
+        let request = HermesNewChatDestination(server: server, profile: "research")
+        let chat = { request.chat(on: entry, listed: list.hermesProfile, isLive: list.isHermesLive) }
+
+        XCTAssertNil(chat(), "Held on a cold launch, before the list reads the host")
+        wire.connectFailure = BotFailure.transport
+        await list.openHermes()
+        XCTAssertNil(chat(), "Held while the host can't be reached")
+
+        wire.connectFailure = nil
+        await list.openHermes()
+        XCTAssertEqual(chat()?.target, .new(profile: "research"))
+    }
+
+    /// A list that read the host and then lost it, closed or dropped, holds a Shortcut's new
+    /// chat again (#1180) until its next read, rather than opening a chat on a host it can't reach.
+    func testANewChatWaitsAgainAfterTheListLosesTheHost() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: page([HermesSessionRow(id: "a")])]
+        let list = makeList(wire)
+        let entry = HermesSessionListEntry(server: server, connection: connection, profile: "default")
+        let request = HermesNewChatDestination(server: server, profile: "research")
+        let chat = { request.chat(on: entry, listed: list.hermesProfile, isLive: list.isHermesLive) }
+        await list.openHermes()
+        XCTAssertTrue(list.isHermesLive)
+
+        list.closeHermes()
+        XCTAssertFalse(list.isHermesLive)
+        XCTAssertNil(chat(), "Held once the list closes its connection")
+        await list.openHermes()
+        XCTAssertEqual(chat()?.target, .new(profile: "research"))
+
+        wire.onDisconnect?(BotFailure.transport)
+        XCTAssertFalse(list.isHermesLive)
+        XCTAssertNil(chat(), "Held once the list's socket drops")
+        await list.openHermes()
+        XCTAssertEqual(chat()?.target, .new(profile: "research"))
+    }
+
+    /// A Shortcut's new chat arriving while a cached chat covers the paused list (#1180) closes it
+    /// at once, so the list shows and reads the host again (its appearing reopens it), and the new
+    /// chat opens after that read rather than waiting for the user to go back to Sessions.
+    func testAHeldNewChatOverACachedChatOpensAfterTheListReadsAgain() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: page([HermesSessionRow(id: "a")])]
+        wire.connectFailure = BotFailure.transport
+        let list = makeList(wire)
+        await list.openHermes()
+        let entry = HermesSessionListEntry(server: server, connection: connection, profile: "default")
+        var covers = HermesSessionListCovers()
+        covers.chat = HermesSessionChat(server: server, connection: connection, target: .session(profile: "default", key: "a"))
+        list.pauseHermes()
+        let request = HermesNewChatDestination(server: server, profile: "research")
+
+        XCTAssertFalse(covers.open(request, on: entry, listed: list.hermesProfile, isLive: list.isHermesLive))
+        XCTAssertNil(covers.chat, "The cached chat closes before the list is live")
+
+        wire.connectFailure = nil
+        await list.openHermes()
+        XCTAssertTrue(covers.open(request, on: entry, listed: list.hermesProfile, isLive: list.isHermesLive))
+        XCTAssertEqual(covers.chat?.target, .new(profile: "research"))
+    }
+
     // MARK: Fixture
 
     private func makeList(_ wire: HermesSessionListWire, profile: String? = "default",

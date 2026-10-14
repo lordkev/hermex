@@ -202,6 +202,16 @@ import SwiftUI
         XCTAssertEqual(BotUnreadStore(defaults: defaults).load(connectionID: connection.id), ["triage": 100])
     }
 
+    /// The Shortcuts picker titles a Hermes server's Profiles by these names (#1180).
+    func testEachRosterReadLeavesTheProfilesNamesForShortcuts() async throws {
+        let wire = BotInboxFixtureWire(roster: [row("default"), row("triage", look: ["title": .string("Inbox Triage")])])
+        let inbox = try makeInbox(wires: [wire])
+        await inbox.open()
+
+        XCTAssertEqual(HermesProfileNameCache(defaults: defaults).names(for: server),
+                       [.init(profile: "default", title: "Hermes"), .init(profile: "triage", title: "Inbox Triage")])
+    }
+
     func testMissingMetadataReadsPlainAndPinWritesUnderRevisionZero() async throws {
         let wire = BotInboxFixtureWire(roster: [row("triage", look: nil, revision: nil)])
         var configured: [String: BotJSON]?
@@ -1267,7 +1277,8 @@ import SwiftUI
         return BotInbox(server: server, store: store, unread: BotUnreadStore(defaults: defaults),
                         roomStore: BotRoomOrganizeStore(defaults: defaults),
                         sectionOrderStore: BotSectionOrderStore(defaults: defaults),
-                        avatarStore: BotAvatarStore(), reloadSpacing: .zero, reconnectDelays: [.zero],
+                        avatarStore: BotAvatarStore(), profileNames: HermesProfileNameCache(defaults: defaults),
+                        reloadSpacing: .zero, reconnectDelays: [.zero],
                         statusPollInterval: statusPollInterval) { _ in queue.removeFirst() }
     }
 

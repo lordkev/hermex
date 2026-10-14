@@ -25,9 +25,10 @@ A Hermes server's id is its dashboard address as `BotConnection.address(_:)` par
 and its sign-in record is the same `BotConnection` JSON under `bot_connection::<its
 URL>`, so every Bot store, draft, cache, section order and bot link keys by it as they
 do by a webui server. `AuthManager.addHermesServer` saves a sign-in the form already
-verified and activates the server; it needs Bot Mode on and refuses an address already
-in the registry. Turning Bot Mode off later never locks a user out: an existing Hermes
-server still opens, and so do its bot links. Its home (#709) has two sides on one stack
+verified and activates the server, and refuses an address already in the registry.
+Hermes is the default kind (#712), so nothing about a Hermes server needs Bot Mode:
+adding one, moving a webui server to one, and opening one and its bot links all work
+with it off. Its home (#709) has two sides on one stack
 and one shared connection, the Bots inbox and the Sessions list, switched by a bottom bar
 of `(filter) [Bots | Sessions] (new chat)` that each side fills: on Bots the filter holds
 hidden bots and section order and new chat makes a bot or a group chat; on Sessions the
@@ -46,8 +47,9 @@ password focused, no Remove, the avatar as the way out. No Bot screen exists in 
 state, so nothing sends the refused password again; saving a sign-in signs the server
 back in. A webui server's own connection keeps #884's per-screen flag instead. A
 Hermes server sends no webui request: Settings skips its webui loads and hides their
-rows, a webui 401 never signs it out, and new chats, session links and shares switch
-to the first webui server (or say there is none). It has no push pairing until #706,
+rows, a webui 401 never signs it out, and webui's serverless session links (`session?id=`) and
+bare-Profile New Chat in Profile links switch to the first webui server, or open nothing without
+one. New chats (#1180) and shares (#1181) stay on it. It has no push pairing until #706,
 so removing it never calls the relay. Its connection form is reached through Settings
 → Active Server → Hermes connection or Settings → Servers → the server, and saving it
 from either signs the server back in. That server screen's button is Remove Server
@@ -65,8 +67,7 @@ advice and stop, and a mode switch keeps that advice. Anything else, including a
 address or headers only the webui path accepts, goes on to the webui path unchanged:
 onboarding's `configure`, Add Server's `addServer`. Once a webui answered, the "Will
 connect to" line shows `AuthManager.normalizedServerURL`'s URL instead of the Hermes
-parser's. Header rows without a value are never sent or saved. With Bot Mode off, a
-found dashboard shows a one-tap opt-in instead of its fields. When a webui server's own
+parser's. Header rows without a value are never sent or saved. When a webui server's own
 Hermes connection uses exactly the same parsed address, the form offers "Use the sign-in
 saved on <server>": it fills username, password and headers, and the sign-in still
 expects that record's `install_id`. The copies stay until the address parses to another
@@ -553,8 +554,8 @@ mode appends Desktop's note to the typed text's mentions and the chat shows the 
 `@` text as typed. A restored prompt drops the host's context footer and reference lines before
 the note, so an attachment never exposes it. A `.canonicalChat`'s turns drive the Bot Live
 Activity (below), which takes the bot's name and avatar again when a roster read lands
-mid-turn, and draws its avatar again when the bot's picture arrives after the activity started. A row opened by its key keeps the session's `hermes:` activity, with no tap
-destination until #706: the Bot activity's tap looks the chat up by title, which leaves a
+mid-turn, and draws its avatar again when the bot's picture arrives after the activity started. A row opened by its key keeps the session's `hermes:` activity, whose tap is the session link to
+that key (#1165, #1179): the Bot activity's tap looks the chat up by title, which leaves a
 deliberate archive out and finds a replacement instead, and the client cannot tell a deliberate
 archive from a recoverable one. A `linkedRoot` (a bot link's root) the bot has replaced calls
 `ChatView`'s `onChatReplaced` (#554); Update sign-in is `HermesUpdateSignInAction`. Rooms never
@@ -1203,8 +1204,8 @@ inbox stops on (`BotConnectionAdvice.isRetryable`); pull to refresh tries again.
 ### Row actions (#1048)
 
 A Hermes row's menu and swipes rename, pin, archive, delete, duplicate and Export as JSON
-(`SessionRowActionPolicy`), and Move to Project (below). The host has no HTML export, and Hermes
-deep links are #706. Each action goes to the row's own Profile.
+(`SessionRowActionPolicy`), and Move to Project (below). The host has no HTML export. A session
+link opens a row's session from outside the app (below). Each action goes to the row's own Profile.
 
 - **Pin, archive and rename** are `PATCH /api/sessions/{id}` with one field and `profile` in
   the body (`HermesSessionChange`). `pinned` and `archived` apply across the compression
@@ -1427,13 +1428,19 @@ panel (#1113) and Git (#1114) read the same context.
   Hermes client composes `cwd + "/" + path`, and it refuses an absolute path, a `..` component
   or a path with nothing past the root before any request. A child's path is its folder's plus
   its `name`, never the listing's `path`, which the host resolves (`/private/var/…` on a Mac) and
-  so may not start with the `cwd` that was asked for. Downloads (`/api/fs/download`) send the
-  relative path with `profile` and `session_id`, so the host anchors them to the session's own
-  folder; a MEDIA path goes as the reply wrote it. Rows, previews and errors show relative paths,
+  so may not start with the `cwd` that was asked for. A file's download (`/api/fs/download`)
+  sends its host path with `profile` and no `session_id`: with one, the host 404s until it has
+  stored the session, so Save to Files would fail in a chat before its first message (#1138). A
+  MEDIA path goes as the reply wrote it, with `session_id`, so the host resolves it against the
+  session. Rows, previews and errors show relative paths,
   and a refusal whose `detail` names a path reads as the generic failure.
 - **ENOENT-as-200.** `GET /api/fs/list` answers a folder it can't read with 200
   `{entries: [], error}`: `ENOENT` or `ENOTDIR` on the root is the folder-missing state, on a
   subfolder that row's failure; `EACCES` is a permission failure. None reports an error.
+- **Lazy folders.** The host lists one folder at a time, and a macOS-protected folder (Desktop,
+  Documents, Downloads, …) can block 6–11 s before answering `Interrupted system call`. So a
+  Hermes chat's Files opens with every folder closed and lists one only when tapped; webui opens
+  its top-level folders (#1138).
 - **Hidden folders.** The listing hides `.git .hg .svn .cache .next .turbo .venv __pycache__
   build dist node_modules target venv` and credential files, as Desktop does; the app adds no
   workaround. A symlinked folder lists as a file, so it is not browsable and opens the preview's
@@ -1635,6 +1642,91 @@ seeded as `HermesConversation.root` (`linkedRoot`), so the changed-root rejectio
 open a replacement conversation under the link's identity; the chat reports that
 back and the inbox says the conversation is no longer available.
 
+## Opening a Hermes session from outside the app (#1176)
+
+`hermes-agent://session?server=…&id=<stored key>[&profile=…]` names one stored session on one
+configured server: `HermesSessionDestination`, built by `HermesDeepLink.sessionURL(for:)` (widget-
+shared, Foundation only) and parsed and resolved in `Features/Hermes/HermesSessionLookup.swift`.
+A missing `profile` is unknown; an empty one is the host's default Profile.
+`HermesSessionLinkRouter` routes it as a bot link is routed, from the registry and auth state:
+an unconfigured server drops it; another server, signed in or on its sign-in form, is switched
+away from first; signed out, it waits for sign-in. A webui server's link becomes its
+`WebuiPushDestination`, as `webui-push` and a local alert's do, and `session?id=` without a
+server keeps its webui route (#971). The home turns to Sessions and closes Settings and Add
+Server; its list pops its chat and pushed screens and closes its sheets and confirmations
+(`HermesSessionListCovers`), so the chat or notice shows on the list, and looks the session up
+(`HermesSessionLookup`) on the server's saved connection:
+
+- A named Profile is one `GET /api/sessions/{id}?profile=` read; `""` reads the Profile
+  `profiles.list` marks `is_default`; none reads every Profile at once. One hit opens, none
+  says "That chat is no longer on <server>.", two or more say "That chat is in more than one
+  Profile. Open it from Sessions." and open nothing, both as the list's `ActionToast`.
+- The host resolves an unknown key to the one session it prefixes, so a reply whose `id` isn't
+  the link's key is no hit. The read doesn't follow a compression chain or name its root, so the
+  lookup steps up while the parent ended in `compression` (at most 8 parents): the chat opens by
+  the link's key and caches under that root (`HermesSessionChat.lineageRoot`), as its row does.
+- The found row opens the way its list row does: a Bot Chat through the bot route (#1146), any
+  other session in the main chat. A room's session never opens.
+- A failed read (unreachable host, a 503 store) drops the link with no notice; a refused sign-in
+  keeps it held while the server signs out to its sign-in form (#942), and it opens after.
+  A link never sends a prompt or answers a request.
+
+## Shortcuts on Hermes (#1180)
+
+New Chat and New Chat with Voice on an active Hermes server, signed in or not, open a new session
+there (`HermesNewChatDestination.onActiveServer`), never a webui server; on a webui server they are
+unchanged. New Chat in Profile takes a `ProfileEntity`: a Hermes server's Profile is
+`<server URL>|<profile>`, so the same name on two servers is two choices, and queues
+`new-chat-profile?server=…&profile=…`; one whose server or Profile doesn't parse opens nothing
+(`HermesDeepLink.isWebuiNewChatInProfileURL`). A bare id is a webui profile and keeps its webui
+route, so a Shortcut saved before #1180 opens as it did (#971); every bare id resolves through
+`ProfileEntityProvider.profileServer`, the one place #707 can redirect them.
+
+`PendingLinks.hermesNewChat` routes from the registry and auth state as a session link does: a
+removed server drops it, another active server is switched away from, a signed-out server holds it
+for sign-in. The home turns to Sessions and the list opens `.new(profile:)` over whatever covers
+its rows, in the Shortcut's Profile or the one New Session uses, once the list has read the host
+live (`SessionListViewModel.isHermesLive`), even when the Shortcut names its Profile, and never
+from the offline cache (New Session is off offline). The voice variant starts
+dictation (`HermesSessionChat.autoStartsVoiceInput`). A Profile is a bot: it is listed once and
+opens a new session, never its Bot Chat.
+
+The picker (`ProfileEntityQuery.suggestedEntities`) has a section per configured server, untitled
+when only one server lists anything. A Hermes section reads the public `GET /api/status`
+`profiles` (names only, reported behind the sign-in too) with the server's saved Connection
+Headers and no sign-in, titled by the name the Bots roster last showed
+(`HermesProfileNameCache`, app group, keyed by a digest of the server URL, written on every roster read, kept across sign-out,
+deleted with the server) with the Profile's name under it. An unreadable host lists that cache. A
+webui section, "<server> (Web UI)", is the `profileServer` list with its model · provider subtitle.
+A saved Hermes id resolves from the id while its server is configured, without a network read.
+
+## Shares on Hermes (#1181)
+
+A share while a Hermes server is active opens a new session there, never a webui server. The
+extension and its app-group inbox are unchanged: `ContentView` reserves the next share and hands
+it to `HermesServerHome`, which turns to Sessions; without a saved connection it releases the
+share, which stays queued. Once the list has settled New Session's Profile and read the host live
+(`SharedImportReservation.hermesOpening`, as a Shortcut's new chat), it moves the share into that Profile's new-session
+draft (`transfer`, `moveIntoDraft`, `ChatDraftStore.appendShare`): the text goes after any unsent
+text and the files, prepared as a Hermes send takes them under Bot Chat's limits, after any staged
+ones, all written to disk before `ContentView` consumes the reservation. A file that can't go now
+(its type or size, an unreadable image, a full draft, rechecked as the move commits) fails the
+whole move, which releases the share; one
+cut short by leaving the list hands it back still reserved (`SharedImportQueue.abandon`), so a
+staged share is never lost. The list claims the share as its move starts, and no home, on this
+server or another, is offered it until that move ends, so a server switch mid-write can't put it
+in two servers' drafts. The draft records
+the share's item id with its content (`ChatDraft.sharedImportIDs`), so a retry, or a replay after
+the app quit before consuming, adds nothing and is consumed. A composer already open on that draft
+keeps records it never saw (`setAttachments(_:replacing:for:)`), and a move whose records or text
+are gone by the time its write lands takes back only what it added, on disk before the share is
+released, and stays queued (#1198 tracks the composer's side). The list then pushes `.new(profile:)`, whose composer restores that draft, and the first Send creates
+the session and uploads each file once (#1012). Leaving without sending keeps it for the next New
+Session, and a Profile picked before sending carries the draft into the new Profile's chat
+(#1015), unless a draft already waits there. A webui list opens one share and offers later ones in
+its Open Next banner; the Hermes home has none, so it opens each share as it arrives
+(`SharedImportGate`), and each adds to whatever the same Profile's draft already holds.
+
 ## Bot lifecycle
 
 The inbox's `+` button and a row's context menu create, duplicate and delete
@@ -1734,14 +1826,13 @@ was), and stops once all are idle. Caveats: `waiting` relies on the
 other processes and never appear; a tip the live agent rotated after the roster
 read matches no bot until the next roster read.
 
-Bot Mode ships behind `BotModeGate`, one app-wide `@AppStorage` bool that is off
-by default and owned by the Settings "Bot Mode (beta)" row (#496), which sits
-under Archived Sessions so new users notice it. Off hides the Bots row on the
-session list and pops the Bots inbox if it is open; nothing else changes, and
-Bot connections and drafts stay in the Keychain until it is turned on again. The
-gate is not per-server because it hides screens rather than storing user data.
-It is removed, together with its Settings row and `BotModeGateTests`, in the
-release PR that ships Bot Mode, not before.
+A webui server's Bots row sits behind `BotModeGate`, one app-wide `@AppStorage`
+bool that is off by default and owned by the Settings "Bot Mode (beta)" row (#496),
+which sits under Archived Sessions so new users notice it. Off hides the Bots row on a
+webui server's session list and pops the Bots inbox if it is open; nothing else
+changes, and Bot connections and drafts stay in the Keychain until it is turned on
+again. Hermes servers ignore it (#712). The gate is not per-server because it hides
+screens rather than storing user data.
 
 The Bots inbox is a utility destination of the session list, pushed like Tasks
 (the detail column on iPad), so the system back button returns to Sessions and
@@ -1749,8 +1840,8 @@ bot chats push on from the inbox. It has no title of its own: the back button
 and its search / new / connection toolbar are the whole header.
 
 New Bot code belongs only to the main app and XCTest target, apart from the Live
-Activity below. Share-extension and App Intent commands still route to webui
-sessions.
+Activity below. Shares open a new Hermes session on a Hermes server (#1181), with the
+extension unchanged; App Intents open Hermes sessions on a Hermes server (#1180).
 Existing external entry points (session deep links, App Intents, shared imports,
 webui push) replace the navigation destination, which pops an open Bots inbox.
 
@@ -1787,9 +1878,15 @@ avatar and `BotLiveActivity.countChips` for the work counts.
   paired server takes the same handoff (#566): its attributes carry the configured
   server, it requests a token, and it registers under its webui session ID, which
   webui also gives the agent. Webui runs on unpaired servers stay local-only
-  (`pushType: nil`). A compression that rotates the session ID mid-turn moves the
-  plugin's progress to an ID the relay does not know, so that activity goes stale.
-  Ending an orphaned webui activity, or finding one finished at cold launch,
+  (`pushType: nil`). A legacy compression that moves a bot's or a Hermes session's
+  stored key mid-turn (`session.info`'s `stored_session_id`) moves the driven
+  activity's registration with it (`movePushSession`, #1179): the registrar deletes
+  the old route, then puts the token under the new key, so the plugin's progress
+  still reaches it. Attributes cannot change, so the moved key is also kept in the
+  standard defaults (`LiveActivityPushKeys`, scoped by push server and activity
+  identity, dropped at the activity's end and pruned at cold launch); a relaunch
+  matches, re-registers and retires the activity under it. A webui run's compression
+  still moves its ID out from under the relay. Ending an orphaned webui activity, or finding one finished at cold launch,
   retires its registration so the relay stops holding that session's banners.
   There is no push-to-start.
 - **Attention.** Entering an approval or a question alerts: a paired server's relay
@@ -1803,9 +1900,15 @@ avatar and `BotLiveActivity.countChips` for the work counts.
 - **Ownership.** Before every stale or end call the chat checks
   `drivenSessionID`, so an activity a webui run or another bot took over is never
   touched. Token rotation and retirement are serialized: an in-flight registration
-  must be cleaned up before its replacement can register the same session. Ending,
+  must be cleaned up before its replacement can register the same session. Those
+  checks compare the relay's route (relay, install, device token, session), not the
+  configured server, so removing one of two entries for one host (#1178) never deletes
+  the route the other registered. Ending,
   dismissal, and server unpairing retire registrations. Cold launch observes paired
-  activities without resuming their chats; legacy/unpaired activities are removed.
+  activities without resuming their chats; legacy/unpaired bot activities are removed
+  (`LeftoverLiveActivitySettlement`). Its decisions apply only to an activity no chat
+  took over, and whose state and key did not change, while the host read or a route
+  retirement was in flight.
 - **Privacy.** Chips are counts only (plan step, workers, tools). Reply text
   appears only behind the existing response-excerpt setting.
 - **Avatar.** The app renders the bot's photo or drawn face to one PNG under
@@ -1815,18 +1918,27 @@ avatar and `BotLiveActivity.countChips` for the work counts.
 
 A Hermes session in the main chat drives the same manager from
 `HermesChatTurnCoordinator` (#1014), starting, updating and ending the activity where
-its turn does, with the webui layouts. The key is the interim
-`hermes:<profile>:<stored key>` and the stream id the host's `turn_started_at`, so a
-reattach, or the session reopened mid-turn, adopts the turn's activity. Only a session's
+its turn does, with the webui layouts. The key is `hermes:<profile>:<root>`, the chat's
+identity (the key it opened by), and the stream id the host's `turn_started_at`, so a
+reattach, or the session reopened mid-turn, adopts the turn's activity, also after a legacy
+compression moved the stored key (#1179). Only a session's
 first turn after an attach is sure to learn `turn_started_at` live; a later one uses the
 chat's own turn id, so reopening the session during it replaces the activity. Reply text
 follows the excerpt setting; with it off, the reply still moves the status on to writing. An open approval shows as waiting for approval and any other request
 as a question. Leaving or a dropped socket marks it stale, and it checks
-`drivenSessionID` like a bot's chat. It has no push, a tap opens the app as it is
-(`AgentRunTapTarget` builds no route for the key), and the orphan reconciler skips it, so a
-leftover one ages out by its stale date. #706 slice 6.2 replaces the key with
-`<server>:<profile>:<lineage root>#<turn_started_at>` and adds the tap destination, push and
-cold-launch reconciliation. A bot's Bot Chat in the main chat (#1145) keeps the Bot identity
+`drivenSessionID` like a bot's chat. Its attributes carry its server, its tap
+(`destinationURL`, the #1176 session link to the root, which opens the session as its row
+does, an archived Bot Chat row by its key with its Bot Chat root) and the stored key its
+pushes start under (`pushSessionID`). On a paired server it requests a token and the relay
+keeps it fresh like a bot's, moving with the stored key (above). One a build before #1179
+started has neither: no route (a tap opens the app as it is) and no push. The webui orphan
+reconciler skips it. Cold launch adopts a paired one like a bot's; an unpaired one on the
+signed-in active Hermes server is checked with one `session.active_list` read (never
+`session.resume`): listed under its key, the key it last moved to, or its root with any
+status but `idle`, it stays (so does one naming no key);
+otherwise it ends as complete ("Response complete"), since how the run ended is unknown, and
+retires any registration. A read that fails, or another server's activity, leaves it to its
+stale date. A bot's Bot Chat in the main chat (#1145) keeps the Bot identity
 instead: `startBot` with `AgentRunActivityBot` for the bot's `BotDestination` at the canonical
 root, the stored key as its push session, the bot's name as the title (session titles never
 replace it), its rendered avatar, and one stream per `turn_started_at`, so a tap opens the
@@ -2355,10 +2467,17 @@ gateway socket). It reads `GET /api/plugins/hermex-push/pairing` first, and only
 route's own answers decide what the host needs: 200 means the relay is set and the plugin
 loaded, so it is paired as it stands, with nothing installed and no restart interrupting
 work; 409 means a loaded plugin with nowhere to send, which needs the address alone, since
-the plugin re-reads it; 404 means the plugin is missing, which needs the full sequence.
-Anything else — a timeout, a server error, keys this build cannot read — is reported as it
-is, because reconfiguring on those would replace a self-hosted relay and restart a gateway
-over a failure that had nothing to do with setup. The full sequence runs
+the plugin re-reads it. A 404 is read by its body (hermes-agent `ca678285`, #1178):
+
+| 404 body | Meaning | Setup |
+| --- | --- | --- |
+| `{"detail":"Plugin not found"}` | off, or not installed (auth middleware) | the full sequence |
+| `{"detail":"No such API endpoint: …"}` | on, but the dashboard never mounted its routes | plugins hub: on disk → "Restart Hermes to finish"; not on disk → the full sequence; no plugins list → Pair step fails, host unchanged |
+| `{"error":"Headless backend (hermes serve): …"}` | `hermes serve`'s catch-all, read like the line above | as above |
+
+Anything else — another 404, a timeout, a server error, keys this build cannot read — is
+reported as it is, because reconfiguring on those would replace a self-hosted relay and
+restart a gateway over a failure that had nothing to do with setup. The full sequence runs
 in the order the host needs: `PUT /api/env` sets
 `HERMEX_PUSH_RELAY_URL` at the root so every Profile inherits it, `POST
 /api/dashboard/agent-plugins/install` and `…/hermex-push/enable` install the
@@ -2374,9 +2493,19 @@ reinstalls instead of refusing. Reinstalling cannot unpair a phone: the plugin k
 key pair in `plugin-data`. The revision is whatever the repository resolves to; pinning a
 `ref` is an open owner decision.
 
-The restart drops the route, so the pairing read retries a missing route, a 409
-from an unread relay address and a refused connection on a fixed schedule before
-the step fails. A failure names its step and leaves nothing half-paired: the keys
+`POST /api/gateway/restart` restarts only the messaging gateway (`hermes gateway restart`),
+not the dashboard that serves the pairing route: the dashboard mounts plugin routes once,
+when it starts. So the restart loads nothing new there; it is kept as it runs today, being
+harmless for push (owner decision, #1178). A plugin turned off after the dashboard
+mounted it answers again once enabled. One the dashboard never mounted — a fresh install,
+or one installed after it started — answers "No such API endpoint", and setup stops at that
+read instead of retrying it: Settings shows the plugin card's "Restart Hermes to finish"
+(`.setupNeedsRestart`), which asks the user to restart `hermes dashboard` on the host, then
+"Check again". The phone never restarts a dashboard that hasn't loaded the plugin, since
+only the plugin's own route can. Check again re-reads the pairing route and pairs a host
+that now answers (setting the relay address first if it answers 409); it installs and
+restarts nothing. Other missing routes, a 409 from an unread relay address and a refused
+connection are retried on a fixed schedule before the step fails. A failure names its step and leaves nothing half-paired: the keys
 are wiped, and the host hands back the same pair on the next attempt, because the
 plugin keeps them in `plugin-data` rather than its install directory.
 
@@ -2471,7 +2600,8 @@ never pairs by itself; "Turn on notifications…" stays the way to pair. Turning
 off drops the offer, because its install would enable the plugin again. Bump the constant in
 the release that follows a plugin release (TESTFLIGHT.md's release gates).
 
-Every way out removes this phone at the relay and wipes the keys.
+Every way out removes this phone at the relay and wipes the keys, except that a relay
+device another entry for the same host still shares stays registered (`push.md`, #1178).
 `HermexPushProvisioner.disable()` stops the host sending first, then calls
 `PushRegistrar.disable`, so a failure at either end changes nothing the user has to
 unpick. `PushRegistrar.forget` is the teardown that cannot fail — the keys go whether or
@@ -2504,13 +2634,21 @@ entitlement is the push Keychain group alone: no app group, no networking, no Sw
 rename of `installKey` or `previewKey` in `PushPairing` breaks previews.
 
 The Profile exists only inside the ciphertext, so the extension writes it back to
-`userInfo["hermex_profile"]`. `PushAppDelegate` is the notification-center delegate: a
-tap becomes `PushNotificationRouter.botDestination` — `source == "bot"`, the pairing
-picks the server, that server's Bot connection supplies the UUID — and rides the one bot
-deep link (#554) through `AppIntentRouter`. No conversation is passed: `session_id` is
-the run's live session, not the bot's durable root. A tap only navigates; an approval is
-never answered from a banner. Anything unroutable just opens the app. Webui taps use the install's configured server
-and `session_id`, independently of Bot Mode and preview decryption. After switching to
+`userInfo["hermex_profile"]` (a named Profile only: the default's `""` stays out).
+`PushAppDelegate` is the notification-center delegate, and a tap becomes
+`PushNotificationRouter.link`, queued through `AppIntentRouter`; the pairing picks the
+server, the active one first when one host is configured twice. On a Hermes server every
+non-webui push (`source` is `bot` for `ios`, `desktop` and `tui` sessions alike) becomes
+the Hermes session link (#1177) for its `session_id`, the session's stored key in every
+hook, with the written-back Profile or none. The Sessions list resolves it as any session
+link: gone or in two Profiles says so, a Bot Chat opens its bot, and a legacy compression
+chain opens at its tip. `is_subagent` adds `subagent=1`, and the lookup opens the
+`_delegate_from` key when present; otherwise it walks the child's compression segments
+before taking one `parent_session_id` hop. An approval card appears only from the host's
+`open_requests` on resume. Only on a webui server does `source == "bot"` still open
+`botDestination`, its Bot connection's bot (legacy Bot Mode). A tap only navigates; an
+approval is never answered from a banner. Anything unroutable just opens the app. Webui taps use the install's configured webui server
+(never a Hermes alias of the same host) and `session_id`, independently of Bot Mode and preview decryption. After switching to
 that server (and signing in if needed), a live session lookup opens the conversation;
 a missing session leaves its session list without an error. It never searches another
 server or uses a stale cached session. A paired server suppresses local completion
@@ -2533,7 +2671,7 @@ a phone that is offline when the run ends gets the `end` without the alert.
 
 While the app is open, `PushAppDelegate` presents relay pushes itself (#566); iOS would
 otherwise show none, approvals included. `PushPresence` records the conversation on
-screen (a webui session ID, or a bot's live agent session) and, when that server's
+screen (a webui session ID, or a Hermes session's current stored key) and, when that server's
 "Quiet the Open Chat" preference is on (the default), hides its pushes except
 `approval`, `clarify`, `input` and `turn_error`. The preference travels to the relay as
 `presence_suppression`, but the app never sends the relay's `active_session_id` /

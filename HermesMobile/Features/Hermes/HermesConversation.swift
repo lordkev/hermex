@@ -24,12 +24,14 @@ enum ConversationTarget: Hashable, Sendable {
     }
 
     /// The composer draft's key, which its attachments share. A Bot Chat keeps the key it
-    /// has always had, so no saved draft moves.
-    func draftKey(server: URL, connectionID: UUID) -> ChatDraftKey {
+    /// has always had, so no saved draft moves. A session in a legacy compression chain keys by
+    /// the chain's `lineageRoot` when its row or link named one, so every segment's chat shares
+    /// the list row's draft (#1176).
+    func draftKey(server: URL, connectionID: UUID, lineageRoot: String? = nil) -> ChatDraftKey {
         switch self {
         case .canonicalChat(let profile): return .bot(server: server, connectionID: connectionID, profile: profile)
         case .session(let profile, let key):
-            return .hermesSession(server: server, connectionID: connectionID, profile: profile, key: key)
+            return .hermesSession(server: server, connectionID: connectionID, profile: profile, key: lineageRoot ?? key)
         case .new(let profile, _, _): return .hermesSession(server: server, connectionID: connectionID, profile: profile, key: nil)
         }
     }
@@ -81,8 +83,9 @@ enum HermesRequestAnswer: Equatable {
     /// One of this runtime's frames, in `seq` order with duplicates dropped. `afterGap`
     /// when frames before it were lost: the rebuild signal, and `replayWasReset` is set.
     func conversation(didReceive frame: BotJSON, afterGap: Bool)
-    /// Frames were lost with none to apply: one came without a `seq`, or more arrived
-    /// while attaching than the hold keeps. Rebuild from a full snapshot.
+    /// Frames were lost with none to apply: one came without a `seq`, more arrived while
+    /// attaching than the hold keeps, or the host reclaimed the runtime. Rebuild from a
+    /// full snapshot.
     func conversationDidLoseFrames()
     /// A frame held while attaching; it is handed over once connected.
     func conversation(didHold frame: BotJSON)
@@ -463,9 +466,11 @@ extension HermesConversationOwner {
     }
 
     /// Routes one event from the shared socket, which carries other screens' sessions
-    /// too: only this runtime's frames and host requests reach the owner.
+    /// too: only this runtime's frames and host requests reach the owner, and a
+    /// `session.reclaimed` naming this runtime or stored key.
     private func receive(_ event: BotJSON) {
         guard connectionState != .disconnected, runtime != nil else { return }
+        if event["type"].text == "session.reclaimed" { return reclaim(event["payload"]) }
         if let session = Self.requestSession(event) {
             guard session == runtime else { return }
             owner?.conversation(didReceiveRequest: event)
@@ -478,6 +483,20 @@ extension HermesConversationOwner {
             return
         }
         admit(event)
+    }
+
+    /// The host tore down a runtime the client never closed (idle timeout, LRU eviction, an
+    /// orphan reap) and broadcast it to every client, with both ids in the payload. When it
+    /// was this session's, the rest of its frames are lost: the owner rebuilds as after a
+    /// gap, which reattaches to the stored key now, so the next write finds a live runtime
+    /// instead of failing with 4001. A close this client asked for is never announced.
+    private func reclaim(_ payload: BotJSON) {
+        let ownRuntime = payload["session_id"].text == runtime
+        let ownKey = storedKey.map { payload["stored_session_id"].text == $0 } ?? false
+        guard ownRuntime || ownKey else { return }
+        let reason = payload["reason"].text ?? "unknown", name = logName
+        HermesConnectionLog.logger.notice("\(name, privacy: .public): the host reclaimed the runtime (\(reason, privacy: .public)); reattaching")
+        owner?.conversationDidLoseFrames()
     }
 
     /// The session a host request envelope names: a string `id`, a `method` and
